@@ -1,1 +1,32 @@
+#!/bin/bash
+set -e
 
+# Criar diretórios
+mkdir -p pterodactyl/wings
+cd pterodactyl/wings
+
+# Criar docker-compose.yml
+cat > docker-compose.yml << 'EOF'
+version: "3.8"
+
+services:
+  wings:
+    image: ghcr.io/pterodactyl/wings:latest
+    restart: always
+    network_mode: host
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/etc/pterodactyl
+      - ./logs:/var/log/pterodactyl
+      - /var/lib/pterodactyl:/var/lib/pterodactyl
+    environment:
+      TZ: "UTC"
+
+EOF
+
+# Criar pastas de dados
+mkdir -p ./data ./logs /var/lib/pterodactyl
+
+# Subir o container
+docker-compose up -d
