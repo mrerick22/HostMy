@@ -1,12 +1,72 @@
 #!/bin/bash
 set -e
 
-# Criar pastas
-mkdir -p ~/pterodactyl/panel
-mkdir -p ~/pterodactyl/wings
+# Cores para interface
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
 
-# Criar docker-compose para o Painel
-cat > ~/pterodactyl/panel/docker-compose.yml << 'EOF'
+# Função para exibir o logo
+show_logo() {
+    clear
+    echo -e "${PURPLE}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${PURPLE}║                                                                              ║${NC}"
+    echo -e "${PURPLE}║  ${WHITE}███████╗██████╗ ██╗ ██████╗      ██████╗ ███╗   ██╗███████╗ ${CYAN}█████╗ ${PURPLE} ║${NC}"
+    echo -e "${PURPLE}║  ${WHITE}██╔════╝██╔══██╗██║██╔════╝     ██╔═══██╗████╗  ██║██╔════╝${CYAN}██╔══██╗${PURPLE} ║${NC}"
+    echo -e "${PURPLE}║  ${WHITE}█████╗  ██████╔╝██║██║          ██║   ██║██╔██╗ ██║█████╗  ${CYAN}██║  ╚═╝${PURPLE} ║${NC}"
+    echo -e "${PURPLE}║  ${WHITE}██╔══╝  ██╔══██╗██║██║          ██║   ██║██║╚██╗██║██╔══╝  ${CYAN}██║  ██╗${PURPLE} ║${NC}"
+    echo -e "${PURPLE}║  ${WHITE}███████╗██║  ██║██║╚██████╗     ╚██████╔╝██║ ╚████║███████╗${CYAN}╚█████╔╝${PURPLE} ║${NC}"
+    echo -e "${PURPLE}║  ${WHITE}╚══════╝╚═╝  ╚═╝╚═╝ ╚═════╝      ╚═════╝ ╚═╝  ╚═══╝╚══════╝${CYAN} ╚════╝ ${PURPLE} ║${NC}"
+    echo -e "${PURPLE}║                                                                              ║${NC}"
+    echo -e "${PURPLE}║                      ${YELLOW}Pterodactyl One-Click Installer${PURPLE}                     ║${NC}"
+    echo -e "${PURPLE}║                            ${CYAN}Versão 1.0 - by Eric${PURPLE}                           ║${NC}"
+    echo -e "${PURPLE}║                                                                              ║${NC}"
+    echo -e "${PURPLE}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo
+}
+
+# Função para pausar
+pause() {
+    echo -e "\n${YELLOW}Pressione ENTER para continuar...${NC}"
+    read -r
+}
+
+# Função para verificar se Docker está instalado
+check_docker() {
+    if ! command -v docker &> /dev/null; then
+        echo -e "${RED}❌ Docker não está instalado!${NC}"
+        echo -e "${YELLOW}Por favor, instale o Docker primeiro.${NC}"
+        echo -e "${CYAN}Visite: https://docs.docker.com/get-docker/${NC}"
+        exit 1
+    fi
+    
+    if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
+        echo -e "${RED}❌ Docker Compose não está disponível!${NC}"
+        echo -e "${YELLOW}Por favor, instale o Docker Compose primeiro.${NC}"
+        exit 1
+    fi
+}
+
+# Função para instalar Pterodactyl Panel
+install_panel() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║        ${WHITE}INSTALANDO PTERODACTYL PANEL${BLUE}    ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -e "${CYAN}📁 Criando estrutura de pastas...${NC}"
+    mkdir -p ~/pterodactyl/panel/{var,nginx,database}
+    
+    echo -e "${CYAN}📝 Criando configuração do Docker Compose...${NC}"
+    
+    # Criar docker-compose para o Painel
+    cat > ~/pterodactyl/panel/docker-compose.yml << 'EOF'
 version: '3.8'
 
 services:
@@ -22,31 +82,75 @@ services:
       - DB_PORT=3306
       - DB_DATABASE=panel
       - DB_USERNAME=pterodactyl
-      - DB_PASSWORD=CHANGE_ME
+      - DB_PASSWORD=CHANGE_ME_SECURE_PASSWORD
+      - CACHE_DRIVER=redis
+      - SESSION_DRIVER=redis
+      - QUEUE_DRIVER=redis
+      - REDIS_HOST=cache
     volumes:
       - ./var/:/app/var
       - ./nginx/:/etc/nginx/conf.d
     depends_on:
       - database
+      - cache
 
   database:
     image: mariadb:10.11
     restart: always
     environment:
-      - MYSQL_ROOT_PASSWORD=CHANGE_ROOT
+      - MYSQL_ROOT_PASSWORD=CHANGE_ROOT_PASSWORD_SECURE
       - MYSQL_DATABASE=panel
       - MYSQL_USER=pterodactyl
-      - MYSQL_PASSWORD=CHANGE_ME
+      - MYSQL_PASSWORD=CHANGE_ME_SECURE_PASSWORD
     volumes:
       - ./database:/var/lib/mysql
+    ports:
+      - "3306:3306"
 
   cache:
     image: redis:alpine
     restart: always
+    ports:
+      - "6379:6379"
 EOF
 
-# Criar docker-compose para o Wings
-cat > ~/pterodactyl/wings/docker-compose.yml << 'EOF'
+    echo -e "${CYAN}🚀 Iniciando containers...${NC}"
+    cd ~/pterodactyl/panel
+    
+    # Usar docker compose (comando mais novo) ou docker-compose (comando legado)
+    if docker compose version &> /dev/null; then
+        docker compose up -d
+    else
+        docker-compose up -d
+    fi
+    
+    echo -e "\n${GREEN}✅ Pterodactyl Panel instalado com sucesso!${NC}"
+    echo -e "${YELLOW}📋 Informações importantes:${NC}"
+    echo -e "${WHITE}   • URL do Painel: ${CYAN}http://localhost:8080${NC}"
+    echo -e "${WHITE}   • Banco de dados: MariaDB na porta 3306${NC}"
+    echo -e "${WHITE}   • Cache: Redis na porta 6379${NC}"
+    echo -e "${WHITE}   • Arquivos: ~/pterodactyl/panel/${NC}"
+    echo
+    echo -e "${RED}🔐 IMPORTANTE: Altere as senhas no docker-compose.yml antes de usar em produção!${NC}"
+    
+    pause
+}
+
+# Função para instalar Wings
+install_wings() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║         ${WHITE}INSTALANDO PTERODACTYL WINGS${BLUE}    ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -e "${CYAN}📁 Criando estrutura de pastas...${NC}"
+    mkdir -p ~/pterodactyl/wings/data
+    
+    echo -e "${CYAN}📝 Criando configuração do Docker Compose...${NC}"
+    
+    # Criar docker-compose para o Wings
+    cat > ~/pterodactyl/wings/docker-compose.yml << 'EOF'
 version: '3.8'
 
 services:
@@ -54,14 +158,269 @@ services:
     image: ghcr.io/pterodactyl/wings:latest
     restart: always
     network_mode: host
+    tty: true
+    environment:
+      TZ: "UTC"
+      WINGS_UID: 988
+      WINGS_GID: 988
+      WINGS_USERNAME: pterodactyl
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./data:/etc/pterodactyl
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "/var/lib/docker/containers/:/var/lib/docker/containers/"
+      - "./data:/etc/pterodactyl"
+      - "/tmp/pterodactyl:/tmp/pterodactyl"
+      - "/var/lib/pterodactyl:/var/lib/pterodactyl"
+    working_dir: /etc/pterodactyl
 EOF
 
-# Subir containers
-docker compose -f ~/pterodactyl/panel/docker-compose.yml up -d
-docker compose -f ~/pterodactyl/wings/docker-compose.yml up -d
+    echo -e "${CYAN}🚀 Iniciando Wings...${NC}"
+    cd ~/pterodactyl/wings
+    
+    # Usar docker compose (comando mais novo) ou docker-compose (comando legado)
+    if docker compose version &> /dev/null; then
+        docker compose up -d
+    else
+        docker-compose up -d
+    fi
+    
+    echo -e "\n${GREEN}✅ Pterodactyl Wings instalado com sucesso!${NC}"
+    echo -e "${YELLOW}📋 Informações importantes:${NC}"
+    echo -e "${WHITE}   • Wings rodando em modo host${NC}"
+    echo -e "${WHITE}   • Configuração: ~/pterodactyl/wings/data/${NC}"
+    echo -e "${WHITE}   • Logs: docker logs pterodactyl-wings-wings-1${NC}"
+    echo
+    echo -e "${RED}⚠️  IMPORTANTE: Configure o arquivo config.yml no diretório data/${NC}"
+    echo -e "${WHITE}   Você precisa gerar a configuração no painel administrativo!${NC}"
+    
+    pause
+}
 
-echo "✅ Pterodactyl Panel e Wings instalados e rodando!"
-echo "👉 Painel em: http://localhost:8080"
+# Função para mostrar status
+show_status() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║            ${WHITE}STATUS DOS SERVIÇOS${BLUE}          ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -e "${CYAN}🔍 Verificando Pterodactyl Panel...${NC}"
+    cd ~/pterodactyl/panel 2>/dev/null || { echo -e "${RED}   ❌ Panel não instalado${NC}"; }
+    if [ -d ~/pterodactyl/panel ]; then
+        if docker compose ps 2>/dev/null || docker-compose ps 2>/dev/null; then
+            echo -e "${GREEN}   ✅ Panel rodando${NC}"
+        else
+            echo -e "${YELLOW}   ⚠️  Panel parado${NC}"
+        fi
+    fi
+    
+    echo -e "\n${CYAN}🔍 Verificando Pterodactyl Wings...${NC}"
+    cd ~/pterodactyl/wings 2>/dev/null || { echo -e "${RED}   ❌ Wings não instalado${NC}"; }
+    if [ -d ~/pterodactyl/wings ]; then
+        if docker compose ps 2>/dev/null || docker-compose ps 2>/dev/null; then
+            echo -e "${GREEN}   ✅ Wings rodando${NC}"
+        else
+            echo -e "${YELLOW}   ⚠️  Wings parado${NC}"
+        fi
+    fi
+    
+    echo -e "\n${CYAN}🌐 URLs de acesso:${NC}"
+    echo -e "${WHITE}   • Panel: ${CYAN}http://localhost:8080${NC}"
+    
+    pause
+}
+
+# Menu de gerenciamento Panel
+panel_menu() {
+    while true; do
+        show_logo
+        echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║      ${WHITE}GERENCIAR PTERODACTYL PANEL${BLUE}      ║${NC}"
+        echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+        echo
+        echo -e "${WHITE}1)${NC} ${GREEN}Instalar Panel${NC}"
+        echo -e "${WHITE}2)${NC} ${YELLOW}Parar Panel${NC}"
+        echo -e "${WHITE}3)${NC} ${CYAN}Iniciar Panel${NC}"
+        echo -e "${WHITE}4)${NC} ${PURPLE}Ver Logs${NC}"
+        echo -e "${WHITE}5)${NC} ${RED}Desinstalar Panel${NC}"
+        echo -e "${WHITE}0)${NC} ${WHITE}Voltar ao Menu Principal${NC}"
+        echo
+        echo -ne "${YELLOW}Escolha uma opção: ${NC}"
+        read -r choice
+        
+        case $choice in
+            1) install_panel ;;
+            2) 
+                cd ~/pterodactyl/panel 2>/dev/null && {
+                    docker compose down 2>/dev/null || docker-compose down
+                    echo -e "${GREEN}Panel parado!${NC}"
+                    pause
+                } || {
+                    echo -e "${RED}Panel não encontrado!${NC}"
+                    pause
+                }
+                ;;
+            3) 
+                cd ~/pterodactyl/panel 2>/dev/null && {
+                    docker compose up -d 2>/dev/null || docker-compose up -d
+                    echo -e "${GREEN}Panel iniciado!${NC}"
+                    pause
+                } || {
+                    echo -e "${RED}Panel não encontrado!${NC}"
+                    pause
+                }
+                ;;
+            4) 
+                cd ~/pterodactyl/panel 2>/dev/null && {
+                    docker compose logs -f 2>/dev/null || docker-compose logs -f
+                } || {
+                    echo -e "${RED}Panel não encontrado!${NC}"
+                    pause
+                }
+                ;;
+            5) 
+                echo -e "${RED}⚠️  Tem certeza que deseja desinstalar o Panel? (y/N): ${NC}"
+                read -r confirm
+                if [[ $confirm =~ ^[Yy]$ ]]; then
+                    cd ~/pterodactyl/panel 2>/dev/null && {
+                        docker compose down -v 2>/dev/null || docker-compose down -v
+                        cd ~
+                        rm -rf ~/pterodactyl/panel
+                        echo -e "${GREEN}Panel desinstalado!${NC}"
+                    } || {
+                        echo -e "${RED}Panel não encontrado!${NC}"
+                    }
+                    pause
+                fi
+                ;;
+            0) break ;;
+            *) 
+                echo -e "${RED}Opção inválida!${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Menu de gerenciamento Wings
+wings_menu() {
+    while true; do
+        show_logo
+        echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║       ${WHITE}GERENCIAR PTERODACTYL WINGS${BLUE}      ║${NC}"
+        echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+        echo
+        echo -e "${WHITE}1)${NC} ${GREEN}Instalar Wings${NC}"
+        echo -e "${WHITE}2)${NC} ${YELLOW}Parar Wings${NC}"
+        echo -e "${WHITE}3)${NC} ${CYAN}Iniciar Wings${NC}"
+        echo -e "${WHITE}4)${NC} ${PURPLE}Ver Logs${NC}"
+        echo -e "${WHITE}5)${NC} ${RED}Desinstalar Wings${NC}"
+        echo -e "${WHITE}0)${NC} ${WHITE}Voltar ao Menu Principal${NC}"
+        echo
+        echo -ne "${YELLOW}Escolha uma opção: ${NC}"
+        read -r choice
+        
+        case $choice in
+            1) install_wings ;;
+            2) 
+                cd ~/pterodactyl/wings 2>/dev/null && {
+                    docker compose down 2>/dev/null || docker-compose down
+                    echo -e "${GREEN}Wings parado!${NC}"
+                    pause
+                } || {
+                    echo -e "${RED}Wings não encontrado!${NC}"
+                    pause
+                }
+                ;;
+            3) 
+                cd ~/pterodactyl/wings 2>/dev/null && {
+                    docker compose up -d 2>/dev/null || docker-compose up -d
+                    echo -e "${GREEN}Wings iniciado!${NC}"
+                    pause
+                } || {
+                    echo -e "${RED}Wings não encontrado!${NC}"
+                    pause
+                }
+                ;;
+            4) 
+                cd ~/pterodactyl/wings 2>/dev/null && {
+                    docker compose logs -f 2>/dev/null || docker-compose logs -f
+                } || {
+                    echo -e "${RED}Wings não encontrado!${NC}"
+                    pause
+                }
+                ;;
+            5) 
+                echo -e "${RED}⚠️  Tem certeza que deseja desinstalar o Wings? (y/N): ${NC}"
+                read -r confirm
+                if [[ $confirm =~ ^[Yy]$ ]]; then
+                    cd ~/pterodactyl/wings 2>/dev/null && {
+                        docker compose down -v 2>/dev/null || docker-compose down -v
+                        cd ~
+                        rm -rf ~/pterodactyl/wings
+                        echo -e "${GREEN}Wings desinstalado!${NC}"
+                    } || {
+                        echo -e "${RED}Wings não encontrado!${NC}"
+                    }
+                    pause
+                fi
+                ;;
+            0) break ;;
+            *) 
+                echo -e "${RED}Opção inválida!${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Menu principal
+main_menu() {
+    while true; do
+        show_logo
+        echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║            ${WHITE}MENU PRINCIPAL${BLUE}               ║${NC}"
+        echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+        echo
+        echo -e "${WHITE}1)${NC} ${GREEN}Gerenciar Pterodactyl Panel${NC}"
+        echo -e "${WHITE}2)${NC} ${CYAN}Gerenciar Pterodactyl Wings${NC}"
+        echo -e "${WHITE}3)${NC} ${YELLOW}Status dos Serviços${NC}"
+        echo -e "${WHITE}4)${NC} ${PURPLE}Instalar Tudo (Panel + Wings)${NC}"
+        echo -e "${WHITE}0)${NC} ${RED}Sair${NC}"
+        echo
+        echo -ne "${YELLOW}Escolha uma opção: ${NC}"
+        read -r choice
+        
+        case $choice in
+            1) panel_menu ;;
+            2) wings_menu ;;
+            3) show_status ;;
+            4) 
+                echo -e "${CYAN}🚀 Instalando Panel e Wings...${NC}"
+                install_panel
+                install_wings
+                show_status
+                ;;
+            0) 
+                echo -e "\n${GREEN}👋 Obrigado por usar o Eric-One-Click!${NC}"
+                echo -e "${CYAN}   Desenvolvido com ❤️  para a comunidade Pterodactyl${NC}"
+                exit 0
+                ;;
+            *) 
+                echo -e "${RED}Opção inválida! Tente novamente.${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Função principal
+main() {
+    # Verificar se Docker está instalado
+    check_docker
+    
+    # Mostrar menu principal
+    main_menu
+}
+
+# Executar script
+main "$@"
