@@ -79,6 +79,27 @@ check_requirements() {
     echo -e "${GREEN}✅ Diretório de instalação: $PTERODACTYL_DIR${NC}"
 }
 
+# Função para corrigir permissões do Wings
+fix_wings_permissions() {
+    echo -e "${CYAN}🔧 Preparando ambiente para o Wings...${NC}"
+    
+    # Criar diretório temporário se não existir
+    sudo mkdir -p /tmp/pterodactyl
+    sudo chown -R $USER:$USER /tmp/pterodactyl
+    sudo chmod 777 /tmp/pterodactyl
+    
+    # Verificar se usuário está no grupo docker
+    if ! groups | grep -q '\bdocker\b'; then
+        echo -e "${YELLOW}⚠️  Adicionando usuário ao grupo docker...${NC}"
+        sudo usermod -aG docker $USER
+        echo -e "${GREEN}✅ Usuário adicionado ao grupo docker.${NC}"
+        echo -e "${YELLOW}⚠️  Faça logout e login again para aplicar as mudanças!${NC}"
+        sleep 2
+    fi
+    
+    echo -e "${GREEN}✅ Ambiente preparado para o Wings!${NC}"
+}
+
 # Função para instalar Pterodactyl Panel
 install_panel() {
     show_logo
@@ -177,8 +198,11 @@ install_wings() {
     echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
     echo
     
+    # Corrigir permissões primeiro
+    fix_wings_permissions
+    
     echo -e "${CYAN}📁 Criando estrutura de pastas...${NC}"
-    mkdir -p "$PTERODACTYL_DIR/wings/data"
+    mkdir -p "$PTERODACTYL_DIR/wings"/{data,volumes}
     
     # Verificar se as pastas foram criadas
     if [ ! -d "$PTERODACTYL_DIR/wings" ]; then
@@ -188,7 +212,7 @@ install_wings() {
     
     echo -e "${CYAN}📝 Criando configuração do Docker Compose...${NC}"
     
-    # Criar docker-compose para o Wings
+    # Criar docker-compose para o Wings (SOLUÇÃO 2 IMPLEMENTADA)
     cat > "$PTERODACTYL_DIR/wings/docker-compose.yml" << 'EOF'
 version: '3.8'
 
@@ -208,7 +232,7 @@ services:
       - "/var/lib/docker/containers/:/var/lib/docker/containers/"
       - "./data:/etc/pterodactyl"
       - "/tmp/pterodactyl:/tmp/pterodactyl"
-      - "/var/lib/pterodactyl:/var/lib/pterodactyl"
+      - "./volumes:/var/lib/pterodactyl"  # SOLUÇÃO 2: Diretório local ao invés de /var/lib/
     working_dir: /etc/pterodactyl
 EOF
 
@@ -226,6 +250,7 @@ EOF
     echo -e "${YELLOW}📋 Informações importantes:${NC}"
     echo -e "${WHITE}   • Wings rodando em modo host${NC}"
     echo -e "${WHITE}   • Configuração: $PTERODACTYL_DIR/wings/data/${NC}"
+    echo -e "${WHITE}   • Volumes: $PTERODACTYL_DIR/wings/volumes/${NC}"
     echo -e "${WHITE}   • Logs: docker logs pterodactyl-wings-wings-1${NC}"
     echo
     echo -e "${RED}⚠️  IMPORTANTE: Configure o arquivo config.yml no diretório data/${NC}"
@@ -270,6 +295,9 @@ show_status() {
     echo -e "${WHITE}   • Panel: ${CYAN}http://localhost:8080${NC}"
     echo -e "\n${CYAN}📂 Diretório de instalação:${NC}"
     echo -e "${WHITE}   • Localização: ${CYAN}$PTERODACTYL_DIR${NC}"
+    echo -e "${WHITE}   • Panel: ${CYAN}$PTERODACTYL_DIR/panel/${NC}"
+    echo -e "${WHITE}   • Wings: ${CYAN}$PTERODACTYL_DIR/wings/${NC}"
+    echo -e "${WHITE}   • Volumes: ${CYAN}$PTERODACTYL_DIR/wings/volumes/${NC}"
     
     pause
 }
