@@ -1,208 +1,64 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Configurando Pterodactyl Wings para CodeSandbox..."
+# Criar pastas
+mkdir -p ~/pterodactyl/panel
+mkdir -p ~/pterodactyl/wings
 
-# Criar estrutura de diretórios
-mkdir -p pterodactyl/wings/{config,data,logs,tmp}
-cd pterodactyl/wings
+# Criar docker-compose para o Painel
+cat > ~/pterodactyl/panel/docker-compose.yml << 'EOF'
+version: '3.8'
 
+services:
+  panel:
+    image: ghcr.io/pterodactyl/panel:latest
+    restart: always
+    ports:
+      - "8080:80"
+    environment:
+      - APP_URL=http://localhost:8080
+      - APP_TIMEZONE=UTC
+      - DB_HOST=database
+      - DB_PORT=3306
+      - DB_DATABASE=panel
+      - DB_USERNAME=pterodactyl
+      - DB_PASSWORD=root
+    volumes:
+      - ./var/:/app/var
+      - ./nginx/:/etc/nginx/conf.d
+    depends_on:
+      - database
 
+  database:
+    image: mariadb:10.11
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=CHANGE_ROOT
+      - MYSQL_DATABASE=panel
+      - MYSQL_USER=pterodactyl
+      - MYSQL_PASSWORD=CHANGE_ME
+    volumes:
+      - ./database:/var/lib/mysql
 
-# Criar docker-compose.yml adaptado para CodeSandbox
-cat > docker-compose.yml << 'EOF'
+  cache:
+    image: redis:alpine
+    restart: always
+EOF
+
+# Criar docker-compose para o Wings
+cat > ~/pterodactyl/wings/docker-compose.yml << 'EOF'
 version: '3.8'
 
 services:
   wings:
     image: ghcr.io/pterodactyl/wings:latest
-    restart: unless-stopped
-    networks:
-      - wings
-    ports:
-      - "8080:8080"
-      - "2022:2022"
-      - "443:443"
-    tty: true
-    environment:
-      TZ: "UTC"
-      WINGS_UID: 988
-      WINGS_GID: 988
+    restart: always
+    network_mode: host
     volumes:
-      # Wings config (será criado automaticamente ou montado via painel)
-      # - "./config:/etc/pterodactyl"
-      # Docker socket (para CodeSandbox pode precisar de ajustes)
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      # Wings data
-      - "./data:/var/lib/pterodactyl/volumes"
-      - "./logs:/var/log/pterodactyl"
-      - "./tmp:/tmp/pterodactyl"
-      # Docker logs
-      - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
-    privileged: true
-
-  # Simulador de Docker (para ambiente CodeSandbox)
-  docker-in-docker:
-    image: docker:dind
-    privileged: true
-    environment:
-      DOCKER_TLS_CERTDIR: ""
-    volumes:
-      - "docker-data:/var/lib/docker"
-    networks:
-      - wings
-    ports:
-      - "2376:2376"
-
-  # Web interface para monitoramento (opcional)
-  portainer:
-    image: portainer/portainer-ce:latest
-    restart: unless-stopped
-    ports:
-      - "9000:9000"
-    volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "portainer-data:/data"
-    networks:
-      - wings
-
-volumes:
-  docker-data:
-  portainer-data:
-
-networks:
-  wings:
-    driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: 172.18.0.0/16
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/etc/pterodactyl
 EOF
 
-# Criar script de configuração inicial
-cat > setup.sh << 'EOF'
-#!/bin/bash
-set -e
-
-echo "🔧 Configurando Wings..."
-
-# Verificar se Docker está disponível
-if ! command -v docker &> /dev/null; then
-    echo "❌ Docker não encontrado. Instalando..."
-    # Para CodeSandbox, pode ser necessário usar docker-in-docker
-    echo "ℹ️  No CodeSandbox, use o serviço docker-in-docker"
-fi
-
-# Criar rede do Docker
-echo "📡 Criando rede pterodactyl_nw..."
-docker network create pterodactyl_nw --driver=bridge --subnet=172.18.0.0/16 --gateway=172.18.0.1 2>/dev/null || echo "Rede já existe"
-
-# Definir permissões
-echo "🔒 Configurando permissões..."
-sudo chown -R 988:988 ./data ./logs ./tmp 2>/dev/null || echo "Permissões configuradas (se disponível)"
-
-echo "✅ Configuração inicial concluída!"
-echo ""
-echo "📝 Próximos passos:"
-echo "1. Edite config-example.yml e renomeie para ./config/config.yml"
-echo "2. Ou use: ./auto-configure.sh <PANEL_URL> <UUID> <TOKEN_ID> <TOKEN>"
-echo "3. Execute: docker-compose up -d"
-echo "4. Acesse http://localhost:9000 para o Portainer (opcional)"
-EOF
-
-
-
-# Criar README para CodeSandbox
-cat > README.md << 'EOF'
-# Pterodactyl Wings - Setup para CodeSandbox
-
-Este setup configura o Pterodactyl Wings (daemon) para funcionar em ambiente CodeSandbox.
-
-## 🚀 Início Rápido
-
-1. **Configurar Wings:**
-   ```bash
-   chmod +x setup.sh configure-example.sh
-   ./setup.sh
-   ```
-
-2. **Configurar Wings:**
-   - Copie `config-example.yml` para `config/config.yml` e edite
-   - Ou use o script automático: `./auto-configure.sh <URL> <UUID> <TOKEN_ID> <TOKEN>`
-
-3. **Iniciar serviços:**
-   ```bash
-   docker-compose up -d
-   ```
-
-## 📋 Serviços Disponíveis
-
-- **Wings API**: http://localhost:8080
-- **SFTP**: localhost:2022
-- **Portainer**: http://localhost:9000 (interface web para Docker)
-
-## ⚙️ Configuração
-
-### Dados necessários do Painel:
-- UUID do Wings
-- Token ID
-- Token
-- URL do painel
-
-### Portas utilizadas:
-- 8080: Wings API
-- 2022: SFTP
-- 9000: Portainer (opcional)
-- 443: SSL (se habilitado)
-
-## 🔧 Problemas Conhecidos no CodeSandbox
-
-1. **Docker Socket**: Pode ser necessário usar docker-in-docker
-2. **Permissões**: Algumas operações privilegiadas podem não funcionar
-3. **Networking**: Limitações de rede do ambiente sandbox
-
-## 📝 Comandos Úteis
-
-```bash
-# Ver logs do Wings
-docker-compose logs -f wings
-
-# Reiniciar Wings
-docker-compose restart wings
-
-# Parar todos os serviços
-docker-compose down
-
-# Ver status dos containers
-docker-compose ps
-```
-
-## 🐛 Debug
-
-- Verifique os logs em `./logs/`
-- Use `docker-compose logs wings` para debug
-- Portainer oferece interface gráfica para gerenciar containers
-EOF
-
-# Tornar scripts executáveis
-chmod +x setup.sh
-
-echo ""
-echo "🎉 Setup do Pterodactyl Wings criado com sucesso!"
-echo ""
-echo "📁 Estrutura criada:"
-echo "  pterodactyl/wings/"
-echo "  ├── config-example.yml     # Template de configuração"
-echo "  ├── docker-compose.yml     # Serviços Docker"
-echo "  ├── setup.sh               # Script de configuração inicial"
-echo "  ├── auto-configure.sh      # Script de configuração automática"
-echo "  └── README.md              # Documentação"
-echo ""
-echo "📝 Próximos passos:"
-echo "1. cd pterodactyl/wings"
-echo "2. ./setup.sh"
-echo "3. ./auto-configure.sh <PANEL_URL> <UUID> <TOKEN_ID> <TOKEN>"
-echo "4. docker-compose up -d"
-echo ""
-echo "ℹ️  Para CodeSandbox, pode ser necessário ajustar as configurações"
-echo "   de Docker devido às limitações do ambiente sandbox."
+echo "✅ Instalação concluída!"
+echo "👉 Vá até ~/pterodactyl/panel e rode: docker compose up -d"
+echo "👉 Vá até ~/pterodactyl/wings e rode: docker compose up -d"
