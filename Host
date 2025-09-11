@@ -12,7 +12,7 @@ WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # Definir diretório de trabalho
-PTERODACTYL_DIR="pterodactyl"
+PTERODACTYL_DIR="$HOME/workspace/pterodactyl"
 
 # Função para exibir o logo
 show_logo() {
@@ -87,15 +87,6 @@ fix_wings_permissions() {
     sudo mkdir -p /tmp/pterodactyl
     sudo chown -R $USER:$USER /tmp/pterodactyl
     sudo chmod 777 /tmp/pterodactyl
-    
-    # Verificar se usuário está no grupo docker
-    if ! groups | grep -q '\bdocker\b'; then
-        echo -e "${YELLOW}⚠️  Adicionando usuário ao grupo docker...${NC}"
-        sudo usermod -aG docker $USER
-        echo -e "${GREEN}✅ Usuário adicionado ao grupo docker.${NC}"
-        echo -e "${YELLOW}⚠️  Faça logout e login again para aplicar as mudanças!${NC}"
-        sleep 2
-    fi
     
     echo -e "${GREEN}✅ Ambiente preparado para o Wings!${NC}"
 }
@@ -455,39 +446,39 @@ main_menu() {
     while true; do
         show_logo
         echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-        echo -e "${BLUE}║            ${WHITE}MENU PRINCIPAL${BLUE}               ║${NC}"
-        echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
-        echo
-        echo -e "${WHITE}1)${NC} ${GREEN}Gerenciar Pterodactyl Panel${NC}"
-        echo -e "${WHITE}2)${NC} ${CYAN}Gerenciar Pterodactyl Wings${NC}"
-        echo -e "${WHITE}3)${NC} ${YELLOW}Status dos Serviços${NC}"
-        echo -e "${WHITE}4)${NC} ${PURPLE}Instalar Tudo (Panel + Wings)${NC}"
-        echo -e "${WHITE}0)${NC} ${RED}Sair${NC}"
-        echo
-        echo -ne "${YELLOW}Escolha uma opção: ${NC}"
-        read -r choice
-        
-        case $choice in
-            1) panel_menu ;;
-            2) wings_menu ;;
-            3) show_status ;;
-            4) 
-                echo -e "${CYAN}🚀 Instalando Panel e Wings...${NC}"
-                install_panel
-                install_wings
-                show_status
-                ;;
-            0) 
-                echo -e "\n${GREEN}👋 Obrigado por usar o Eric-One-Click!${NC}"
-                echo -e "${CYAN}   Desenvolvido com ❤️  para a comunidade Pterodactyl${NC}"
-                exit 0
-                ;;
-            *) 
-                echo -e "${RED}Opção inválida! Tente novamente.${NC}"
-                sleep 1
-                ;;
-        esac
-    done
+    echo -e "${BLUE}║            ${WHITE}MENU PRINCIPAL${BLUE}               ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    echo -e "${WHITE}1)${NC} ${GREEN}Gerenciar Pterodactyl Panel${NC}"
+    echo -e "${WHITE}2)${NC} ${CYAN}Gerenciar Pterodactyl Wings${NC}"
+    echo -e "${WHITE}3)${NC} ${YELLOW}Status dos Serviços${NC}"
+    echo -e "${WHITE}4)${NC} ${PURPLE}Instalar Tudo (Panel + Wings)${NC}"
+    echo -e "${WHITE}0)${NC} ${RED}Sair${NC}"
+    echo
+    echo -ne "${YELLOW}Escolha uma opção: ${NC}"
+    read -r choice
+    
+    case $choice in
+        1) panel_menu ;;
+        2) wings_menu ;;
+        3) show_status ;;
+        4) 
+            echo -e "${CYAN}🚀 Instalando Panel e Wings...${NC}"
+            install_panel
+            install_wings
+            show_status
+            ;;
+        0) 
+            echo -e "\n${GREEN}👋 Obrigado por usar o Eric-One-Click!${NC}"
+            echo -e "${CYAN}   Desenvolvido com ❤️  para a comunidade Pterodactyl${NC}"
+            exit 0
+            ;;
+        *) 
+            echo -e "${RED}Opção inválida! Tente novamente.${NC}"
+            sleep 1
+            ;;
+    esac
+done
 }
 
 # Função principal
