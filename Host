@@ -12,7 +12,7 @@ WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # Definir diretório de trabalho
-PTERODACTYL_DIR="$HOME/workspace/pterodactyl"
+PTERODACTYL_DIR="pterodactyl"
 
 # Função para exibir o logo
 show_logo() {
