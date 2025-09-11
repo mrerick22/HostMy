@@ -22,7 +22,7 @@ services:
       - DB_PORT=3306
       - DB_DATABASE=panel
       - DB_USERNAME=pterodactyl
-      - DB_PASSWORD=root
+      - DB_PASSWORD=CHANGE_ME
     volumes:
       - ./var/:/app/var
       - ./nginx/:/etc/nginx/conf.d
@@ -59,6 +59,9 @@ services:
       - ./data:/etc/pterodactyl
 EOF
 
-echo "✅ Instalação concluída!"
-echo "👉 Vá até ~/pterodactyl/panel e rode: docker compose up -d"
-echo "👉 Vá até ~/pterodactyl/wings e rode: docker compose up -d"
+# Subir containers
+docker compose -f ~/pterodactyl/panel/docker-compose.yml up -d
+docker compose -f ~/pterodactyl/wings/docker-compose.yml up -d
+
+echo "✅ Pterodactyl Panel e Wings instalados e rodando!"
+echo "👉 Painel em: http://localhost:8080"
