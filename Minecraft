@@ -2014,7 +2014,6 @@ show_tunnels_status() {
     
     pause
 }
-}
 
 # Função principal
 main() {
