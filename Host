@@ -55,6 +55,9 @@ check_requirements() {
         exit 1
     fi
     
+    # Usar caminho absoluto para evitar problemas
+    PTERODACTYL_DIR="$(pwd)/pterodactyl"
+    
     # Verificar/criar diretório principal
     echo -e "${CYAN}📁 Criando diretório principal: $PTERODACTYL_DIR${NC}"
     
@@ -113,15 +116,15 @@ create_admin_user() {
         return 1
     fi
     
-    cd "$PTERODACTYL_DIR/panel"
-    
-    # Verificar se o panel está rodando
-    if ! docker compose ps | grep -q "Up" && ! docker-compose ps | grep -q "Up" 2>/dev/null; then
-        echo -e "${RED}❌ Panel não está rodando!${NC}"
-        echo -e "${YELLOW}Iniciando Panel...${NC}"
-        docker compose up -d 2>/dev/null || docker-compose up -d
-        sleep 10
-    fi
+    # Verificar se o panel está rodando usando subshell para evitar mudança de diretório
+    (cd "$PTERODACTYL_DIR/panel" && {
+        if ! docker compose ps -q >/dev/null 2>&1 && ! docker-compose ps -q >/dev/null 2>&1; then
+            echo -e "${RED}❌ Panel não está rodando!${NC}"
+            echo -e "${YELLOW}Iniciando Panel...${NC}"
+            docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null
+            sleep 10
+        fi
+    })
     
     echo -e "${CYAN}👤 Vamos criar seu usuário administrativo...${NC}"
     echo
@@ -152,23 +155,25 @@ create_admin_user() {
     
     echo -e "${CYAN}🔄 Criando usuário administrativo...${NC}"
     
-    # Executar comando no container
-    CONTAINER_NAME=$(docker compose ps -q panel 2>/dev/null || docker-compose ps -q panel 2>/dev/null)
-    
-    if [ -z "$CONTAINER_NAME" ]; then
-        echo -e "${RED}❌ Container do Panel não encontrado!${NC}"
-        pause
-        return 1
-    fi
-    
-    # Criar usuário usando artisan
-    docker exec -it "$CONTAINER_NAME" php artisan p:user:make \
-        --email="$email" \
-        --username="$username" \
-        --name-first="$(echo $fullname | cut -d' ' -f1)" \
-        --name-last="$(echo $fullname | cut -d' ' -f2-)" \
-        --password="$password" \
-        --admin=1
+    # Executar comando no container usando subshell
+    (cd "$PTERODACTYL_DIR/panel" && {
+        CONTAINER_NAME=$(docker compose ps -q panel 2>/dev/null || docker-compose ps -q panel 2>/dev/null)
+        
+        if [ -z "$CONTAINER_NAME" ]; then
+            echo -e "${RED}❌ Container do Panel não encontrado!${NC}"
+            pause
+            return 1
+        fi
+        
+        # Criar usuário usando artisan
+        docker exec -it "$CONTAINER_NAME" php artisan p:user:make \
+            --email="$email" \
+            --username="$username" \
+            --name-first="$(echo $fullname | cut -d' ' -f1)" \
+            --name-last="$(echo $fullname | cut -d' ' -f2-)" \
+            --password="$password" \
+            --admin=1
+    })
     
     if [ $? -eq 0 ]; then
         echo -e "\n${GREEN}✅ Usuário administrativo criado com sucesso!${NC}"
@@ -286,21 +291,41 @@ install_wings() {
     echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
     echo
     
+    echo -e "${CYAN}🔧 Debug - Instalando em: $PTERODACTYL_DIR/wings${NC}"
+    
     # Corrigir permissões primeiro
     fix_wings_permissions
     
     echo -e "${CYAN}📁 Criando estrutura de pastas...${NC}"
-    mkdir -p "$PTERODACTYL_DIR/wings"/{data,volumes}
     
-    # Verificar se as pastas foram créadas
+    # Criar diretório principal se não existir
+    if ! mkdir -p "$PTERODACTYL_DIR/wings" 2>/dev/null; then
+        echo -e "${RED}❌ Erro ao criar diretório principal!${NC}"
+        echo -e "${YELLOW}Tentando com sudo...${NC}"
+        sudo mkdir -p "$PTERODACTYL_DIR/wings"
+        sudo chown -R $USER:$USER "$PTERODACTYL_DIR/wings"
+    fi
+    
+    # Criar subdiretórios
+    mkdir -p "$PTERODACTYL_DIR/wings/data"
+    mkdir -p "$PTERODACTYL_DIR/wings/volumes"
+    
+    # Verificar se as pastas foram criadas
     if [ ! -d "$PTERODACTYL_DIR/wings" ]; then
         echo -e "${RED}❌ Falha ao criar estrutura de pastas!${NC}"
+        echo -e "${YELLOW}📂 Tentando listar diretório pai:${NC}"
+        ls -la "$PTERODACTYL_DIR/" 2>/dev/null || echo "Diretório pai não existe"
+        pause
         return 1
     fi
     
-    echo -e "${CYAN}📝 Criando configuração do Docker Compose...${NC}"
+    echo -e "${GREEN}✅ Estrutura de pastas criada${NC}"
+    echo -e "${CYAN}📂 Verificando estrutura:${NC}"
+    ls -la "$PTERODACTYL_DIR/wings/"
     
-    # Criar docker-compose para o Wings (SEM INICIAR)
+    echo -e "\n${CYAN}📝 Criando configuração do Docker Compose...${NC}"
+    
+    # Criar docker-compose para o Wings
     cat > "$PTERODACTYL_DIR/wings/docker-compose.yml" << 'EOF'
 version: '3.8'
 
@@ -323,17 +348,61 @@ services:
     working_dir: /etc/pterodactyl
 EOF
 
+    # Verificar se o arquivo foi criado
+    if [ -f "$PTERODACTYL_DIR/wings/docker-compose.yml" ]; then
+        echo -e "${GREEN}✅ docker-compose.yml criado com sucesso${NC}"
+        echo -e "${CYAN}📄 Conteúdo do arquivo:${NC}"
+        echo -e "${WHITE}$(head -5 "$PTERODACTYL_DIR/wings/docker-compose.yml")${NC}"
+        echo -e "${WHITE}... (arquivo completo)${NC}"
+    else
+        echo -e "${RED}❌ Falha ao criar docker-compose.yml${NC}"
+        echo -e "${YELLOW}📂 Conteúdo atual da pasta:${NC}"
+        ls -la "$PTERODACTYL_DIR/wings/"
+        pause
+        return 1
+    fi
+    
+    # Criar arquivo README com instruções
+    cat > "$PTERODACTYL_DIR/wings/README.txt" << 'EOF'
+PTERODACTYL WINGS - INSTRUÇÕES DE CONFIGURAÇÃO
+
+1. Acesse o painel administrativo: http://localhost:8080
+2. Faça login como administrador
+3. Vá em "Admin" -> "Nodes" 
+4. Clique em "Create New"
+5. Preencha os dados do Node:
+   - Name: Seu nome para o servidor
+   - Location: Selecione uma localização
+   - FQDN: localhost (ou seu domínio)
+   - Communicate Over SSL: Desabilitado (para desenvolvimento local)
+   - Memory: RAM disponível em MB
+   - Disk: Espaço em disco em MB
+   - Daemon Port: 8080 (padrão)
+6. Após criar, clique em "Configuration"
+7. Copie todo o conteúdo da configuração
+8. Cole no arquivo: ./data/config.yml
+9. Use o menu do script para iniciar o Wings
+
+Para criar o arquivo config.yml:
+nano ./data/config.yml
+
+Para iniciar após configurar:
+Opção 2 -> Gerenciar Pterodactyl Wings -> Opção 3 (Iniciar Wings)
+EOF
+
     echo -e "\n${GREEN}✅ Pterodactyl Wings instalado com sucesso!${NC}"
     echo -e "${YELLOW}📋 Informações importantes:${NC}"
     echo -e "${WHITE}   • Wings preparado mas NÃO iniciado${NC}"
+    echo -e "${WHITE}   • Localização: $PTERODACTYL_DIR/wings/${NC}"
     echo -e "${WHITE}   • Configuração: $PTERODACTYL_DIR/wings/data/${NC}"
     echo -e "${WHITE}   • Volumes: $PTERODACTYL_DIR/wings/volumes/${NC}"
-    echo -e "${WHITE}   • Arquivos: $PTERODACTYL_DIR/wings/${NC}"
+    echo -e "${WHITE}   • Instruções: $PTERODACTYL_DIR/wings/README.txt${NC}"
     echo
-    echo -e "${RED}⚠️  IMPORTANTE ANTES DE INICIAR:${NC}"
-    echo -e "${YELLOW}   1. Crie um Node no painel administrativo${NC}"
-    echo -e "${YELLOW}   2. Copie a configuração gerada para: $PTERODACTYL_DIR/wings/data/config.yml${NC}"
-    echo -e "${YELLOW}   3. Use o menu 'Gerenciar Wings' para iniciar o serviço${NC}"
+    echo -e "${RED}⚠️  PRÓXIMOS PASSOS OBRIGATÓRIOS:${NC}"
+    echo -e "${YELLOW}   1. Acesse: ${CYAN}http://localhost:8080${NC}"
+    echo -e "${YELLOW}   2. Crie um Node no painel admin${NC}"
+    echo -e "${YELLOW}   3. Copie a configuração para: ${CYAN}$PTERODACTYL_DIR/wings/data/config.yml${NC}"
+    echo -e "${YELLOW}   4. Use 'Gerenciar Wings' → 'Iniciar Wings'${NC}"
     
     pause
 }
@@ -346,69 +415,114 @@ show_status() {
     echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
     echo
     
+    echo -e "${CYAN}🔧 Debug - Diretório atual: $(pwd)${NC}"
+    echo -e "${CYAN}🔧 Debug - Pterodactyl DIR: $PTERODACTYL_DIR${NC}"
+    echo
+    
     echo -e "${CYAN}🔍 Verificando Pterodactyl Panel...${NC}"
-    # Verificar se existe e mostrar debug
-    echo -e "${WHITE}   Verificando: $PTERODACTYL_DIR/panel${NC}"
+    echo -e "${WHITE}   📂 Verificando diretório: $PTERODACTYL_DIR/panel${NC}"
+    
     if [ -d "$PTERODACTYL_DIR/panel" ]; then
-        echo -e "${GREEN}   ✅ Diretório encontrado${NC}"
+        echo -e "${GREEN}   ✅ Diretório panel encontrado${NC}"
+        
         if [ -f "$PTERODACTYL_DIR/panel/docker-compose.yml" ]; then
             echo -e "${GREEN}   ✅ docker-compose.yml encontrado${NC}"
-            cd "$PTERODACTYL_DIR/panel"
             
-            # Verificar se os containers estão rodando  
-            RUNNING_CONTAINERS=$(docker compose ps -q 2>/dev/null || docker-compose ps -q 2>/dev/null)
-            if [ ! -z "$RUNNING_CONTAINERS" ]; then
-                echo -e "${GREEN}   ✅ Panel rodando${NC}"
-                echo -e "${CYAN}   📊 Containers:${NC}"
-                docker compose ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null || docker-compose ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null || docker compose ps || docker-compose ps
-            else
-                echo -e "${YELLOW}   ⚠️  Panel instalado mas parado${NC}"
-            fi
-            cd - > /dev/null
+            # Mudar para o diretório e verificar containers
+            (cd "$PTERODACTYL_DIR/panel" && {
+                echo -e "${CYAN}   🔍 Verificando containers...${NC}"
+                
+                # Verificar se existem containers definidos
+                if docker compose config --services >/dev/null 2>&1; then
+                    echo -e "${GREEN}   ✅ Configuração docker-compose válida${NC}"
+                    
+                    # Verificar se estão rodando
+                    RUNNING=$(docker compose ps -q 2>/dev/null)
+                    if [ -n "$RUNNING" ]; then
+                        echo -e "${GREEN}   ✅ Panel RODANDO${NC}"
+                        docker compose ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null || echo "   📊 Containers ativos detectados"
+                    else
+                        echo -e "${YELLOW}   ⚠️  Panel INSTALADO mas PARADO${NC}"
+                    fi
+                elif docker-compose config --services >/dev/null 2>&1; then
+                    echo -e "${GREEN}   ✅ Configuração docker-compose válida (legacy)${NC}"
+                    RUNNING=$(docker-compose ps -q 2>/dev/null)
+                    if [ -n "$RUNNING" ]; then
+                        echo -e "${GREEN}   ✅ Panel RODANDO${NC}"
+                        docker-compose ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null || echo "   📊 Containers ativos detectados"
+                    else
+                        echo -e "${YELLOW}   ⚠️  Panel INSTALADO mas PARADO${NC}"
+                    fi
+                else
+                    echo -e "${RED}   ❌ Configuração docker-compose inválida${NC}"
+                fi
+            })
         else
-            echo -e "${RED}   ❌ docker-compose.yml não encontrado${NC}"
+            echo -e "${RED}   ❌ docker-compose.yml NÃO encontrado${NC}"
+            echo -e "${YELLOW}   📂 Conteúdo da pasta panel:${NC}"
+            ls -la "$PTERODACTYL_DIR/panel/" 2>/dev/null || echo "   (pasta vazia ou inacessível)"
         fi
     else
-        echo -e "${RED}   ❌ Panel não instalado${NC}"
+        echo -e "${RED}   ❌ Diretório panel NÃO EXISTE${NC}"
     fi
     
     echo -e "\n${CYAN}🔍 Verificando Pterodactyl Wings...${NC}"
-    echo -e "${WHITE}   Verificando: $PTERODACTYL_DIR/wings${NC}"
+    echo -e "${WHITE}   📂 Verificando diretório: $PTERODACTYL_DIR/wings${NC}"
+    
     if [ -d "$PTERODACTYL_DIR/wings" ]; then
-        echo -e "${GREEN}   ✅ Diretório encontrado${NC}"
+        echo -e "${GREEN}   ✅ Diretório wings encontrado${NC}"
+        
         if [ -f "$PTERODACTYL_DIR/wings/docker-compose.yml" ]; then
             echo -e "${GREEN}   ✅ docker-compose.yml encontrado${NC}"
-            cd "$PTERODACTYL_DIR/wings"
             
-            # Verificar se o container está rodando
-            RUNNING_CONTAINERS=$(docker compose ps -q 2>/dev/null || docker-compose ps -q 2>/dev/null)
-            if [ ! -z "$RUNNING_CONTAINERS" ]; then
-                echo -e "${GREEN}   ✅ Wings rodando${NC}"
-                docker compose ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null || docker-compose ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null || docker compose ps || docker-compose ps
-            else
-                echo -e "${YELLOW}   ⚠️  Wings instalado mas parado${NC}"
-            fi
-            
-            # Verificar se o config existe
-            if [ -f "./data/config.yml" ]; then
-                echo -e "${GREEN}   ✅ Arquivo de configuração encontrado${NC}"
-            else
-                echo -e "${YELLOW}   ⚠️  Arquivo config.yml não encontrado${NC}"
-            fi
-            cd - > /dev/null
+            # Mudar para o diretório e verificar containers
+            (cd "$PTERODACTYL_DIR/wings" && {
+                echo -e "${CYAN}   🔍 Verificando containers...${NC}"
+                
+                # Verificar se existem containers definidos
+                if docker compose config --services >/dev/null 2>&1; then
+                    echo -e "${GREEN}   ✅ Configuração docker-compose válida${NC}"
+                    
+                    # Verificar se estão rodando
+                    RUNNING=$(docker compose ps -q 2>/dev/null)
+                    if [ -n "$RUNNING" ]; then
+                        echo -e "${GREEN}   ✅ Wings RODANDO${NC}"
+                        docker compose ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null || echo "   📊 Container wings ativo"
+                    else
+                        echo -e "${YELLOW}   ⚠️  Wings INSTALADO mas PARADO${NC}"
+                    fi
+                elif docker-compose config --services >/dev/null 2>&1; then
+                    echo -e "${GREEN}   ✅ Configuração docker-compose válida (legacy)${NC}"
+                    RUNNING=$(docker-compose ps -q 2>/dev/null)
+                    if [ -n "$RUNNING" ]; then
+                        echo -e "${GREEN}   ✅ Wings RODANDO${NC}"
+                        docker-compose ps --format "table {{.Service}}\t{{.Status}}" 2>/dev/null || echo "   📊 Container wings ativo"
+                    else
+                        echo -e "${YELLOW}   ⚠️  Wings INSTALADO mas PARADO${NC}"
+                    fi
+                else
+                    echo -e "${RED}   ❌ Configuração docker-compose inválida${NC}"
+                fi
+                
+                # Verificar config.yml
+                if [ -f "./data/config.yml" ]; then
+                    echo -e "${GREEN}   ✅ config.yml encontrado${NC}"
+                else
+                    echo -e "${YELLOW}   ⚠️  config.yml NÃO encontrado${NC}"
+                fi
+            })
         else
-            echo -e "${RED}   ❌ docker-compose.yml não encontrado${NC}"
+            echo -e "${RED}   ❌ docker-compose.yml NÃO encontrado${NC}"
+            echo -e "${YELLOW}   📂 Conteúdo da pasta wings:${NC}"
+            ls -la "$PTERODACTYL_DIR/wings/" 2>/dev/null || echo "   (pasta vazia ou inacessível)"
         fi
     else
-        echo -e "${RED}   ❌ Wings não instalado${NC}"
+        echo -e "${RED}   ❌ Diretório wings NÃO EXISTE${NC}"
     fi
     
-    echo -e "\n${CYAN}🌐 URLs de acesso:${NC}"
-    echo -e "${WHITE}   • Panel: ${CYAN}http://localhost:8080${NC}"
-    echo -e "\n${CYAN}📂 Diretório de instalação:${NC}"
-    echo -e "${WHITE}   • Localização: ${CYAN}$(pwd)/$PTERODACTYL_DIR${NC}"
-    echo -e "${WHITE}   • Panel: ${CYAN}$PTERODACTYL_DIR/panel/${NC}"
-    echo -e "${WHITE}   • Wings: ${CYAN}$PTERODACTYL_DIR/wings/${NC}"
+    echo -e "\n${CYAN}🌐 Informações de acesso:${NC}"
+    echo -e "${WHITE}   • Panel URL: ${CYAN}http://localhost:8080${NC}"
+    echo -e "${WHITE}   • Diretório: ${CYAN}$PTERODACTYL_DIR${NC}"
     
     pause
 }
@@ -435,8 +549,69 @@ panel_menu() {
         case $choice in
             1) install_panel ;;
             2) 
+                echo -e "${CYAN}🔍 Verificando se Panel está instalado...${NC}"
                 if [ -d "$PTERODACTYL_DIR/panel" ] && [ -f "$PTERODACTYL_DIR/panel/docker-compose.yml" ]; then
                     echo -e "${CYAN}🔄 Parando Panel...${NC}"
+                    (cd "$PTERODACTYL_DIR/panel" && {
+                        docker compose down 2>/dev/null || docker-compose down 2>/dev/null
+                    })
+                    echo -e "${GREEN}✅ Panel parado!${NC}"
+                else
+                    echo -e "${RED}❌ Panel não encontrado ou não instalado!${NC}"
+                    echo -e "${YELLOW}💡 Use a opção 1 para instalar primeiro${NC}"
+                fi
+                pause
+                ;;
+            3) 
+                echo -e "${CYAN}🔍 Verificando se Panel está instalado...${NC}"
+                if [ -d "$PTERODACTYL_DIR/panel" ] && [ -f "$PTERODACTYL_DIR/panel/docker-compose.yml" ]; then
+                    echo -e "${CYAN}🔄 Iniciando Panel...${NC}"
+                    (cd "$PTERODACTYL_DIR/panel" && {
+                        docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null
+                    })
+                    sleep 3
+                    echo -e "${GREEN}✅ Panel iniciado!${NC}"
+                    echo -e "${CYAN}🌐 Acesse: http://localhost:8080${NC}"
+                else
+                    echo -e "${RED}❌ Panel não encontrado ou não instalado!${NC}"
+                    echo -e "${YELLOW}💡 Use a opção 1 para instalar primeiro${NC}"
+                fi
+                pause
+                ;;
+            4) 
+                echo -e "${CYAN}🔍 Verificando se Panel está instalado...${NC}"
+                if [ -d "$PTERODACTYL_DIR/panel" ] && [ -f "$PTERODACTYL_DIR/panel/docker-compose.yml" ]; then
+                    echo -e "${CYAN}📋 Mostrando logs do Panel... (Ctrl+C para sair)${NC}"
+                    (cd "$PTERODACTYL_DIR/panel" && {
+                        docker compose logs -f 2>/dev/null || docker-compose logs -f 2>/dev/null
+                    })
+                else
+                    echo -e "${RED}❌ Panel não encontrado ou não instalado!${NC}"
+                    echo -e "${YELLOW}💡 Use a opção 1 para instalar primeiro${NC}"
+                    pause
+                fi
+                ;;
+            5) create_admin_user ;;
+            6) 
+                echo -e "${RED}⚠️  Tem certeza que deseja desinstalar o Panel? (y/N): ${NC}"
+                read -r confirm
+                if [[ $confirm =~ ^[Yy]$ ]]; then
+                    if [ -d "$PTERODACTYL_DIR/panel" ]; then
+                        echo -e "${CYAN}🔄 Parando e removendo containers...${NC}"
+                        (cd "$PTERODACTYL_DIR/panel" && {
+                            docker compose down -v 2>/dev/null || docker-compose down -v 2>/dev/null
+                        })
+                        echo -e "${CYAN}🗑️ Removendo arquivos...${NC}"
+                        rm -rf "$PTERODACTYL_DIR/panel"
+                        echo -e "${GREEN}✅ Panel desinstalado!${NC}"
+                    else
+                        echo -e "${RED}❌ Panel não encontrado!${NC}"
+                    fi
+                else
+                    echo -e "${YELLOW}❌ Operação cancelada.${NC}"
+                fi
+                pause
+                ;;    echo -e "${CYAN}🔄 Parando Panel...${NC}"
                     cd "$PTERODACTYL_DIR/panel"
                     docker compose down 2>/dev/null || docker-compose down
                     echo -e "${GREEN}✅ Panel parado!${NC}"
@@ -518,17 +693,21 @@ wings_menu() {
         case $choice in
             1) install_wings ;;
             2) 
+                echo -e "${CYAN}🔍 Verificando se Wings está instalado...${NC}"
                 if [ -d "$PTERODACTYL_DIR/wings" ] && [ -f "$PTERODACTYL_DIR/wings/docker-compose.yml" ]; then
                     echo -e "${CYAN}🔄 Parando Wings...${NC}"
-                    cd "$PTERODACTYL_DIR/wings"
-                    docker compose down 2>/dev/null || docker-compose down
+                    (cd "$PTERODACTYL_DIR/wings" && {
+                        docker compose down 2>/dev/null || docker-compose down 2>/dev/null
+                    })
                     echo -e "${GREEN}✅ Wings parado!${NC}"
                 else
-                    echo -e "${RED}❌ Wings não encontrado ou não configurado!${NC}"
+                    echo -e "${RED}❌ Wings não encontrado ou não instalado!${NC}"
+                    echo -e "${YELLOW}💡 Use a opção 1 para instalar primeiro${NC}"
                 fi
                 pause
                 ;;
             3) 
+                echo -e "${CYAN}🔍 Verificando se Wings está instalado...${NC}"
                 if [ -d "$PTERODACTYL_DIR/wings" ] && [ -f "$PTERODACTYL_DIR/wings/docker-compose.yml" ]; then
                     # Verificar se config.yml existe antes de iniciar
                     if [ ! -f "$PTERODACTYL_DIR/wings/data/config.yml" ]; then
@@ -542,6 +721,9 @@ wings_menu() {
                         echo
                         echo -e "${CYAN}💡 Exemplo de comando para criar o arquivo:${NC}"
                         echo -e "${WHITE}   nano $PTERODACTYL_DIR/wings/data/config.yml${NC}"
+                        echo -e "${WHITE}   ou${NC}"
+                        echo -e "${WHITE}   cat > $PTERODACTYL_DIR/wings/data/config.yml${NC}"
+                        echo -e "${WHITE}   (cole a configuração e pressione Ctrl+D)${NC}"
                         echo
                         echo -e "${YELLOW}Deseja continuar mesmo assim? (y/N): ${NC}"
                         read -r confirm
@@ -552,32 +734,45 @@ wings_menu() {
                     fi
                     
                     echo -e "${CYAN}🔄 Iniciando Wings...${NC}"
-                    cd "$PTERODACTYL_DIR/wings"
-                    docker compose up -d 2>/dev/null || docker-compose up -d
+                    (cd "$PTERODACTYL_DIR/wings" && {
+                        docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null
+                    })
                     
-                    if [ $? -eq 0 ]; then
-                        echo -e "${GREEN}✅ Wings iniciado!${NC}"
-                        if [ -f "./data/config.yml" ]; then
-                            echo -e "${GREEN}✅ Configurado e funcionando${NC}"
+                    sleep 3
+                    
+                    # Verificar se iniciou com sucesso
+                    (cd "$PTERODACTYL_DIR/wings" && {
+                        RUNNING=$(docker compose ps -q 2>/dev/null || docker-compose ps -q 2>/dev/null)
+                        if [ -n "$RUNNING" ]; then
+                            echo -e "${GREEN}✅ Wings iniciado com sucesso!${NC}"
+                            if [ -f "./data/config.yml" ]; then
+                                echo -e "${GREEN}✅ Configurado e funcionando${NC}"
+                            else
+                                echo -e "${YELLOW}⚠️  Iniciado mas sem configuração válida${NC}"
+                                echo -e "${YELLOW}⚠️  O Wings pode não funcionar corretamente${NC}"
+                            fi
                         else
-                            echo -e "${YELLOW}⚠️  Iniciado mas sem configuração válida${NC}"
+                            echo -e "${RED}❌ Erro ao iniciar Wings${NC}"
+                            echo -e "${YELLOW}📋 Verificando logs...${NC}"
+                            docker compose logs --tail=10 2>/dev/null || docker-compose logs --tail=10 2>/dev/null
                         fi
-                    else
-                        echo -e "${RED}❌ Erro ao iniciar Wings${NC}"
-                    fi
+                    })
                 else
-                    echo -e "${RED}❌ Wings não encontrado ou não configurado!${NC}"
-                    echo -e "${YELLOW}💡 Instale o Wings primeiro usando a opção 1${NC}"
+                    echo -e "${RED}❌ Wings não encontrado ou não instalado!${NC}"
+                    echo -e "${YELLOW}💡 Use a opção 1 para instalar primeiro${NC}"
                 fi
                 pause
                 ;;
             4) 
+                echo -e "${CYAN}🔍 Verificando se Wings está instalado...${NC}"
                 if [ -d "$PTERODACTYL_DIR/wings" ] && [ -f "$PTERODACTYL_DIR/wings/docker-compose.yml" ]; then
                     echo -e "${CYAN}📋 Mostrando logs do Wings... (Ctrl+C para sair)${NC}"
-                    cd "$PTERODACTYL_DIR/wings"
-                    docker compose logs -f 2>/dev/null || docker-compose logs -f
+                    (cd "$PTERODACTYL_DIR/wings" && {
+                        docker compose logs -f 2>/dev/null || docker-compose logs -f 2>/dev/null
+                    })
                 else
-                    echo -e "${RED}❌ Wings não encontrado ou não configurado!${NC}"
+                    echo -e "${RED}❌ Wings não encontrado ou não instalado!${NC}"
+                    echo -e "${YELLOW}💡 Use a opção 1 para instalar primeiro${NC}"
                     pause
                 fi
                 ;;
@@ -587,11 +782,11 @@ wings_menu() {
                 if [[ $confirm =~ ^[Yy]$ ]]; then
                     if [ -d "$PTERODACTYL_DIR/wings" ]; then
                         echo -e "${CYAN}🔄 Parando e removendo containers...${NC}"
-                        cd "$PTERODACTYL_DIR/wings"
-                        docker compose down -v 2>/dev/null || docker-compose down -v
-                        cd ..
+                        (cd "$PTERODACTYL_DIR/wings" && {
+                            docker compose down -v 2>/dev/null || docker-compose down -v 2>/dev/null
+                        })
                         echo -e "${CYAN}🗑️ Removendo arquivos...${NC}"
-                        rm -rf wings
+                        rm -rf "$PTERODACTYL_DIR/wings"
                         echo -e "${GREEN}✅ Wings desinstalado!${NC}"
                     else
                         echo -e "${RED}❌ Wings não encontrado!${NC}"
