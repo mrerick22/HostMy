@@ -12,7 +12,7 @@ WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # Definir diretório de trabalho
-PTERODACTYL_DIR="pterodactyl"
+PTERODACTYL_DIR="$HOME/workspace/pterodactyl"
 
 # Função para exibir o logo
 show_logo() {
@@ -26,7 +26,7 @@ show_logo() {
     echo -e "${PURPLE}║  ${WHITE}███████╗██║  ██║██║╚██████╗     ╚██████╔╝██║ ╚████║███████╗${CYAN}╚█████╔╝${PURPLE} ║${NC}"
     echo -e "${PURPLE}║  ${WHITE}╚══════╝╚═╝  ╚═╝╚═╝ ╚═════╝      ╚═════╝ ╚═╝  ╚═══╝╚══════╝${CYAN} ╚════╝ ${PURPLE} ║${NC}"
     echo -e "${PURPLE}║                                                                              ║${NC}"
-    echo -e "${PURPLE}║                      ${YELLOW}Pterododactyl One-Click Installer${PURPLE}                     ║${NC}"
+    echo -e "${PURPLE}║                      ${YELLOW}Pterodactyl One-Click Installer${PURPLE}                     ║${NC}"
     echo -e "${PURPLE}║                            ${CYAN}Versão 1.0 - by Eric${PURPLE}                           ║${NC}"
     echo -e "${PURPLE}║                                                                              ║${NC}"
     echo -e "${PURPLE}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
@@ -102,7 +102,7 @@ install_panel() {
     echo -e "${CYAN}📁 Criando estrutura de pastas...${NC}"
     mkdir -p "$PTERODACTYL_DIR/panel"/{var,nginx,database}
     
-    # Verificar se as pastas foram criadas
+    # Verificar se as pastas foram créadas
     if [ ! -d "$PTERODACTYL_DIR/panel" ]; then
         echo -e "${RED}❌ Falha ao criar estrutura de pastas!${NC}"
         return 1
@@ -195,7 +195,7 @@ install_wings() {
     echo -e "${CYAN}📁 Criando estrutura de pastas...${NC}"
     mkdir -p "$PTERODACTYL_DIR/wings"/{data,volumes}
     
-    # Verificar se as pastas foram criadas
+    # Verificar se as pastas foram créadas
     if [ ! -d "$PTERODACTYL_DIR/wings" ]; then
         echo -e "${RED}❌ Falha ao criar estrutura de pastas!${NC}"
         return 1
@@ -393,8 +393,8 @@ wings_menu() {
         echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
         echo
         echo -e "${WHITE}1)${NC} ${GREEN}Instalar Wings${NC}"
-        echo -e "${WHITE}2)${NC} ${YELLOW}Parar Wings${NC}"
-        echo -e "${WHITE}3)${NC} ${CYAN>Iniciar Wings${NC}"
+        echo -e "${WHITE}2)${NC} ${YELLOW>Parar Wings${NC}"
+        echo -e "${WHITE}3)${NC} ${CYAN}Iniciar Wings${NC}"
         echo -e "${WHITE}4)${NC} ${PURPLE}Ver Logs${NC}"
         echo -e "${WHITE}5)${NC} ${RED}Desinstalar Wings${NC}"
         echo -e "${WHITE}0)${NC} ${WHITE}Voltar ao Menu Principal${NC}"
