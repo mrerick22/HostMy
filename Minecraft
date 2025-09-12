@@ -1,0 +1,2029 @@
+#!/bin/bash
+set -e
+
+# Cores para interface
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
+
+# Configurações globais
+USERNAME=$(whoami)
+MINECRAFT_DIR="$(pwd)/minecraft-servers-$USERNAME"
+JAVA_8_URL="https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u392-b08/OpenJDK8U-jre_x64_linux_hotspot_8u392b08.tar.gz"
+JAVA_17_URL="https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.9%2B9/OpenJDK17U-jre_x64_linux_hotspot_17.0.9_9.tar.gz"
+USER_CONFIG_FILE="$MINECRAFT_DIR/.user_config"
+SSH_TUNNELS_FILE="$MINECRAFT_DIR/.ssh_tunnels"
+
+# Função para exibir o logo
+show_logo() {
+    clear
+    echo -e "${PURPLE}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${PURPLE}║                                                                              ║${NC}"
+    echo -e "${PURPLE}║  ${GREEN}███╗   ███╗██╗███╗   ██╗███████╗ ██████╗██████╗  █████╗ ███████╗████████╗${PURPLE}║${NC}"
+    echo -e "${PURPLE}║  ${GREEN}████╗ ████║██║████╗  ██║██╔════╝██╔════╝██╔══██╗██╔══██╗██╔════╝╚══██╔══╝${PURPLE}║${NC}"
+    echo -e "${PURPLE}║  ${GREEN}██╔████╔██║██║██╔██╗ ██║█████╗  ██║     ██████╔╝███████║█████╗     ██║   ${PURPLE}║${NC}"
+    echo -e "${PURPLE}║  ${GREEN}██║╚██╔╝██║██║██║╚██╗██║██╔══╝  ██║     ██╔══██╗██╔══██║██╔══╝     ██║   ${PURPLE}║${NC}"
+    echo -e "${PURPLE}║  ${GREEN}██║ ╚═╝ ██║██║██║ ╚████║███████╗╚██████╗██║  ██║██║  ██║██║        ██║   ${PURPLE}║${NC}"
+    echo -e "${PURPLE}║  ${GREEN}╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝   ${PURPLE}║${NC}"
+    echo -e "${PURPLE}║                                                                              ║${NC}"
+    echo -e "${PURPLE}║                    ${YELLOW}Multi-Platform Server Installer${PURPLE}                    ║${NC}"
+    echo -e "${PURPLE}║                           ${CYAN}Versão 2.0 - by Eric${PURPLE}                          ║${NC}"
+    echo -e "${PURPLE}║                      ${WHITE}👤 Usuário: ${CYAN}$USERNAME${PURPLE}                      ║${NC}"
+    echo -e "${PURPLE}║                                                                              ║${NC}"
+    echo -e "${PURPLE}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo
+}
+
+# Função para pausar
+pause() {
+    echo -e "\n${YELLOW}Pressione ENTER para continuar...${NC}"
+    read -r
+}
+
+# Função para verificar dependências
+check_dependencies() {
+    echo -e "${CYAN}🔍 Verificando dependências para usuário $USERNAME...${NC}"
+    
+    # Verificar wget
+    if ! command -v wget &> /dev/null; then
+        echo -e "${YELLOW}⚠️  Instalando wget...${NC}"
+        sudo apt update && sudo apt install -y wget
+    fi
+    
+    # Verificar unzip
+    if ! command -v unzip &> /dev/null; then
+        echo -e "${YELLOW}⚠️  Instalando unzip...${NC}"
+        sudo apt install -y unzip
+    fi
+    
+    # Verificar tar
+    if ! command -v tar &> /dev/null; then
+        echo -e "${YELLOW}⚠️  Instalando tar...${NC}"
+        sudo apt install -y tar
+    fi
+    
+    # Criar diretório principal do usuário
+    mkdir -p "$MINECRAFT_DIR"
+    
+    # Criar arquivo de configuração do usuário
+    create_user_config
+    
+    echo -e "${GREEN}✅ Dependências verificadas para $USERNAME${NC}"
+    echo -e "${CYAN}📂 Diretório pessoal: $MINECRAFT_DIR${NC}"
+}
+
+# Função para detectar IPs e configurar SSH
+detect_network_info() {
+    echo -e "${CYAN}🌐 Detectando informações de rede...${NC}"
+    
+    # IP local
+    LOCAL_IP=$(hostname -I | awk '{print $1}' 2>/dev/null)
+    if [ -z "$LOCAL_IP" ]; then
+        LOCAL_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $7; exit}')
+    fi
+    
+    # IP público
+    PUBLIC_IP=""
+    echo -e "${CYAN}🔍 Detectando IP público...${NC}"
+    
+    # Tentar vários serviços para obter IP público
+    PUBLIC_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || \
+                curl -s --connect-timeout 5 ipinfo.io/ip 2>/dev/null || \
+                curl -s --connect-timeout 5 icanhazip.com 2>/dev/null || \
+                wget -qO- --timeout=5 ifconfig.me 2>/dev/null)
+    
+    # Verificar se estamos em um ambiente SSH
+    SSH_CONNECTION_INFO=""
+    if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
+        SSH_CONNECTION_INFO="Conectado via SSH"
+        # Obter IP do cliente SSH
+        SSH_CLIENT_IP=$(echo $SSH_CLIENT | awk '{print $1}')
+        if [ -n "$SSH_CLIENT_IP" ]; then
+            SSH_CONNECTION_INFO="SSH de: $SSH_CLIENT_IP"
+        fi
+    fi
+    
+    # Salvar informações de rede no config
+    {
+        echo "LOCAL_IP=$LOCAL_IP"
+        echo "PUBLIC_IP=$PUBLIC_IP"
+        echo "SSH_CONNECTION=$SSH_CONNECTION_INFO"
+        echo "LAST_NETWORK_CHECK=$(date '+%Y-%m-%d %H:%M:%S')"
+    } >> "$USER_CONFIG_FILE"
+    
+    echo -e "${GREEN}✅ Informações de rede detectadas${NC}"
+}
+
+# Função para configurar túnel SSH reverso
+setup_ssh_tunnel() {
+    local server_name="$1"
+    local local_port="$2"
+    local server_type="$3"
+    
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║        ${WHITE}CONFIGURAR TÚNEL SSH${BLUE}           ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -e "${CYAN}🌐 Configurando acesso público para: $server_name${NC}"
+    echo -e "${WHITE}Porta local: $local_port${NC}"
+    echo
+    
+    echo -e "${YELLOW}Escolha o método de acesso público:${NC}"
+    echo -e "${WHITE}1)${NC} ${GREEN}Túnel SSH Reverso (Recomendado)${NC}"
+    echo -e "${WHITE}2)${NC} ${CYAN}Serviços de Tunneling (ngrok/cloudflare)${NC}"
+    echo -e "${WHITE}3)${NC} ${BLUE}Configurar Manualmente${NC}"
+    echo -e "${WHITE}0)${NC} ${WHITE}Pular configuração${NC}"
+    echo
+    echo -ne "${YELLOW}Escolha uma opção: ${NC}"
+    read -r tunnel_choice
+    
+    case $tunnel_choice in
+        1) setup_reverse_ssh_tunnel "$server_name" "$local_port" "$server_type" ;;
+        2) setup_tunneling_service "$server_name" "$local_port" "$server_type" ;;
+        3) show_manual_config "$server_name" "$local_port" "$server_type" ;;
+        0) echo -e "${YELLOW}Configuração de túnel ignorada${NC}" ;;
+        *) echo -e "${RED}Opção inválida${NC}" ;;
+    esac
+    
+    pause
+}
+
+# Função para configurar túnel SSH reverso
+setup_reverse_ssh_tunnel() {
+    local server_name="$1"
+    local local_port="$2"
+    local server_type="$3"
+    
+    echo -e "${CYAN}🔧 Configurando túnel SSH reverso...${NC}"
+    echo
+    
+    echo -ne "${YELLOW}IP/hostname do servidor público: ${NC}"
+    read -r remote_host
+    
+    echo -ne "${YELLOW}Usuário SSH: ${NC}"
+    read -r remote_user
+    
+    echo -ne "${YELLOW}Porta pública desejada (ou ENTER para automática): ${NC}"
+    read -r remote_port
+    
+    if [ -z "$remote_port" ]; then
+        remote_port=$((local_port + 1000))
+        echo -e "${CYAN}Usando porta automática: $remote_port${NC}"
+    fi
+    
+    echo -ne "${YELLOW}Porta SSH do servidor (22): ${NC}"
+    read -r ssh_port
+    ssh_port=${ssh_port:-22}
+    
+    # Criar comando do túnel
+    local tunnel_cmd="ssh -R $remote_port:localhost:$local_port -N -p $ssh_port $remote_user@$remote_host"
+    
+    echo -e "\n${CYAN}🔍 Testando conexão SSH...${NC}"
+    if ssh -o ConnectTimeout=5 -o BatchMode=yes -p $ssh_port "$remote_user@$remote_host" exit 2>/dev/null; then
+        echo -e "${GREEN}✅ Conexão SSH estabelecida${NC}"
+        
+        # Salvar configuração do túnel
+        local tunnel_info="$server_name|$local_port|$remote_host|$remote_user|$remote_port|$ssh_port|$server_type"
+        echo "$tunnel_info" >> "$SSH_TUNNELS_FILE"
+        
+        # Criar script de túnel
+        local tunnel_script="$MINECRAFT_DIR/tunnel-$server_name.sh"
+        cat > "$tunnel_script" << EOF
+#!/bin/bash
+echo "🌐 Iniciando túnel SSH para $server_name"
+echo "Local: localhost:$local_port → Público: $remote_host:$remote_port"
+echo "Pressione Ctrl+C para parar o túnel"
+echo
+$tunnel_cmd
+EOF
+        chmod +x "$tunnel_script"
+        
+        echo -e "\n${GREEN}✅ Túnel SSH configurado com sucesso!${NC}"
+        echo -e "${YELLOW}📋 Informações de acesso:${NC}"
+        echo -e "${WHITE}   • Servidor local: ${CYAN}localhost:$local_port${NC}"
+        echo -e "${WHITE}   • Acesso público: ${CYAN}$remote_host:$remote_port${NC}"
+        echo -e "${WHITE}   • Script do túnel: ${CYAN}$tunnel_script${NC}"
+        echo
+        echo -e "${BLUE}💡 Para ativar o túnel:${NC}"
+        echo -e "${WHITE}   1. Inicie seu servidor Minecraft${NC}"
+        echo -e "${WHITE}   2. Execute: ${CYAN}$tunnel_script${NC}"
+        echo -e "${WHITE}   3. Conecte usando: ${CYAN}$remote_host:$remote_port${NC}"
+        
+    else
+        echo -e "${RED}❌ Erro ao conectar via SSH${NC}"
+        echo -e "${YELLOW}Verifique:${NC}"
+        echo -e "${WHITE}   • Credenciais SSH corretas${NC}"
+        echo -e "${WHITE}   • Servidor acessível${NC}"
+        echo -e "${WHITE}   • Porta SSH correta${NC}"
+    fi
+}
+
+# Função para configurar serviços de tunneling
+setup_tunneling_service() {
+    local server_name="$1"
+    local local_port="$2"
+    local server_type="$3"
+    
+    echo -e "${CYAN}🚀 Configurando serviço de tunneling...${NC}"
+    echo
+    
+    echo -e "${YELLOW}Serviços disponíveis:${NC}"
+    echo -e "${WHITE}1)${NC} ${GREEN}ngrok (Gratuito com limitações)${NC}"
+    echo -e "${WHITE}2)${NC} ${BLUE}Cloudflare Tunnel (Gratuito)${NC}"
+    echo -e "${WHITE}3)${NC} ${PURPLE}LocalTunnel (Gratuito)${NC}"
+    echo
+    echo -ne "${YELLOW}Escolha um serviço: ${NC}"
+    read -r service_choice
+    
+    case $service_choice in
+        1) setup_ngrok "$server_name" "$local_port" "$server_type" ;;
+        2) setup_cloudflare_tunnel "$server_name" "$local_port" "$server_type" ;;
+        3) setup_localtunnel "$server_name" "$local_port" "$server_type" ;;
+        *) echo -e "${RED}Opção inválida${NC}" ;;
+    esac
+}
+
+# Função para configurar ngrok
+setup_ngrok() {
+    local server_name="$1"
+    local local_port="$2"
+    local server_type="$3"
+    
+    echo -e "${CYAN}📦 Configurando ngrok...${NC}"
+    
+    # Verificar se ngrok está instalado
+    if ! command -v ngrok &> /dev/null; then
+        echo -e "${YELLOW}⚠️  ngrok não encontrado. Instalando...${NC}"
+        
+        # Download ngrok
+        local ngrok_url="https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz"
+        wget -O /tmp/ngrok.tgz "$ngrok_url" 2>/dev/null || {
+            echo -e "${RED}❌ Erro ao baixar ngrok${NC}"
+            return 1
+        }
+        
+        # Instalar ngrok
+        mkdir -p "$MINECRAFT_DIR/tools"
+        tar -xzf /tmp/ngrok.tgz -C "$MINECRAFT_DIR/tools"
+        rm /tmp/ngrok.tgz
+        
+        # Adicionar ao PATH temporariamente
+        export PATH="$MINECRAFT_DIR/tools:$PATH"
+    fi
+    
+    echo -e "${YELLOW}🔑 Para usar ngrok, você precisa de um token (gratuito)${NC}"
+    echo -e "${WHITE}1. Acesse: ${CYAN}https://ngrok.com/signup${NC}"
+    echo -e "${WHITE}2. Faça login e copie seu authtoken${NC}"
+    echo
+    echo -ne "${YELLOW}Cole seu authtoken do ngrok: ${NC}"
+    read -r ngrok_token
+    
+    if [ -n "$ngrok_token" ]; then
+        # Configurar ngrok
+        "$MINECRAFT_DIR/tools/ngrok" authtoken "$ngrok_token" || ngrok authtoken "$ngrok_token"
+        
+        # Criar script para tunnel ngrok
+        local tunnel_script="$MINECRAFT_DIR/ngrok-$server_name.sh"
+        cat > "$tunnel_script" << EOF
+#!/bin/bash
+echo "🌐 Iniciando túnel ngrok para $server_name"
+echo "Porta local: $local_port"
+echo "Pressione Ctrl+C para parar"
+echo
+
+# Usar ngrok do diretório tools se estiver disponível
+if [ -f "$MINECRAFT_DIR/tools/ngrok" ]; then
+    "$MINECRAFT_DIR/tools/ngrok" tcp $local_port
+else
+    ngrok tcp $local_port
+fi
+EOF
+        chmod +x "$tunnel_script"
+        
+        echo -e "\n${GREEN}✅ ngrok configurado com sucesso!${NC}"
+        echo -e "${YELLOW}📋 Como usar:${NC}"
+        echo -e "${WHITE}   1. Inicie seu servidor Minecraft${NC}"
+        echo -e "${WHITE}   2. Execute: ${CYAN}$tunnel_script${NC}"
+        echo -e "${WHITE}   3. Copie o endereço TCP fornecido pelo ngrok${NC}"
+        echo -e "${WHITE}   4. Use esse endereço para conectar${NC}"
+    fi
+}
+
+# Função para configurar Cloudflare Tunnel
+setup_cloudflare_tunnel() {
+    local server_name="$1"
+    local local_port="$2"
+    local server_type="$3"
+    
+    echo -e "${CYAN}☁️  Configurando Cloudflare Tunnel...${NC}"
+    echo
+    
+    echo -e "${YELLOW}Para usar Cloudflare Tunnel:${NC}"
+    echo -e "${WHITE}1. Instale cloudflared: ${CYAN}curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb${NC}"
+    echo -e "${WHITE}2. Autentique: ${CYAN}cloudflared tunnel login${NC}"
+    echo -e "${WHITE}3. Crie um túnel: ${CYAN}cloudflared tunnel create $server_name${NC}"
+    echo -e "${WHITE}4. Configure o túnel para a porta $local_port${NC}"
+    echo
+    
+    # Criar script básico
+    local tunnel_script="$MINECRAFT_DIR/cloudflare-$server_name.sh"
+    cat > "$tunnel_script" << EOF
+#!/bin/bash
+echo "☁️  Iniciando Cloudflare Tunnel para $server_name"
+echo "Certifique-se de ter configurado o cloudflared primeiro"
+echo
+
+# Substitua TUNNEL_ID pelo ID do seu túnel
+# cloudflared tunnel run --url tcp://localhost:$local_port TUNNEL_ID
+echo "Execute: cloudflared tunnel run --url tcp://localhost:$local_port SEU_TUNNEL_ID"
+EOF
+    chmod +x "$tunnel_script"
+    
+    echo -e "${GREEN}Script criado: $tunnel_script${NC}"
+}
+
+# Função para configurar LocalTunnel
+setup_localtunnel() {
+    local server_name="$1"
+    local local_port="$2"
+    local server_type="$3"
+    
+    echo -e "${CYAN}🔗 Configurando LocalTunnel...${NC}"
+    
+    # Verificar Node.js
+    if ! command -v npm &> /dev/null; then
+        echo -e "${YELLOW}⚠️  Node.js/npm não encontrado${NC}"
+        echo -e "${WHITE}Instale Node.js primeiro: ${CYAN}https://nodejs.org${NC}"
+        return 1
+    fi
+    
+    # Instalar localtunnel
+    echo -e "${CYAN}📦 Instalando localtunnel...${NC}"
+    npm install -g localtunnel 2>/dev/null || {
+        echo -e "${RED}❌ Erro ao instalar localtunnel${NC}"
+        return 1
+    }
+    
+    # Criar script para tunnel
+    local tunnel_script="$MINECRAFT_DIR/localtunnel-$server_name.sh"
+    cat > "$tunnel_script" << EOF
+#!/bin/bash
+echo "🔗 Iniciando LocalTunnel para $server_name"
+echo "Porta: $local_port"
+echo "Pressione Ctrl+C para parar"
+echo
+
+lt --port $local_port --subdomain minecraft-$server_name-$USERNAME
+EOF
+    chmod +x "$tunnel_script"
+    
+    echo -e "\n${GREEN}✅ LocalTunnel configurado!${NC}"
+    echo -e "${WHITE}Script: ${CYAN}$tunnel_script${NC}"
+}
+
+# Função para mostrar configuração manual
+show_manual_config() {
+    local server_name="$1"
+    local local_port="$2"
+    local server_type="$3"
+    
+    echo -e "${CYAN}📋 Configuração Manual de Acesso Público${NC}"
+    echo
+    
+    echo -e "${YELLOW}Opções para acesso público:${NC}"
+    echo
+    
+    echo -e "${WHITE}1️⃣  Port Forwarding no Roteador:${NC}"
+    echo -e "${WHITE}   • Acesse o painel do seu roteador${NC}"
+    echo -e "${WHITE}   • Configure port forwarding:${NC}"
+    echo -e "${WHITE}     - Porta externa: $local_port${NC}"
+    echo -e "${WHITE}     - Porta interna: $local_port${NC}"
+    echo -e "${WHITE}     - IP interno: $LOCAL_IP${NC}"
+    echo
+    
+    echo -e "${WHITE}2️⃣  VPS/Servidor na Nuvem:${NC}"
+    echo -e "${WHITE}   • Use um servidor VPS${NC}"
+    echo -e "${WHITE}   • Configure túnel SSH reverso${NC}"
+    echo -e "${WHITE}   • Comando: ${CYAN}ssh -R $local_port:localhost:$local_port usuario@vps${NC}"
+    echo
+    
+    echo -e "${WHITE}3️⃣  Serviços de Cloud Gaming:${NC}"
+    echo -e "${WHITE}   • AWS GameLift${NC}"
+    echo -e "${WHITE}   • Google Cloud Game Servers${NC}"
+    echo -e "${WHITE}   • Azure PlayFab${NC}"
+    echo
+    
+    echo -e "${WHITE}🔧 Seu servidor atual:${NC}"
+    echo -e "${WHITE}   • Nome: $server_name${NC}"
+    echo -e "${WHITE}   • Porta: $local_port${NC}"
+    echo -e "${WHITE}   • IP local: $LOCAL_IP${NC}"
+    echo -e "${WHITE}   • IP público: $PUBLIC_IP${NC}"
+}
+
+# Função para obter próxima porta disponível
+get_next_port() {
+    local base_port=25565
+    local user_offset=$(($(id -u) % 1000))  # Usar UID como offset único
+    local last_port=$(grep "LAST_PORT_USED=" "$USER_CONFIG_FILE" 2>/dev/null | cut -d'=' -f2 || echo $base_port)
+    
+    # Calcular porta base única para o usuário
+    local user_base_port=$((base_port + user_offset))
+    
+    # Se a última porta usada for menor que a base do usuário, usar a base
+    if [ "$last_port" -lt "$user_base_port" ]; then
+        last_port=$user_base_port
+    fi
+    
+    # Procurar próxima porta livre
+    local test_port=$((last_port + 1))
+    while netstat -ln 2>/dev/null | grep -q ":$test_port "; do
+        ((test_port++))
+    done
+    
+    # Atualizar última porta usada
+    sed -i "s/LAST_PORT_USED=.*/LAST_PORT_USED=$test_port/" "$USER_CONFIG_FILE"
+    
+    echo $test_port
+}
+
+# Função para incrementar contador de servidores
+increment_server_count() {
+    local current_count=$(grep "TOTAL_SERVERS=" "$USER_CONFIG_FILE" | cut -d'=' -f2)
+    local new_count=$((current_count + 1))
+    sed -i "s/TOTAL_SERVERS=.*/TOTAL_SERVERS=$new_count/" "$USER_CONFIG_FILE"
+}
+
+# Função para instalar Java
+install_java() {
+    local java_version="$1"
+    local java_dir="$MINECRAFT_DIR/java${java_version}"
+    
+    if [ -d "$java_dir" ]; then
+        echo -e "${GREEN}✅ Java $java_version já instalado${NC}"
+        return 0
+    fi
+    
+    echo -e "${CYAN}📦 Instalando Java $java_version...${NC}"
+    mkdir -p "$java_dir"
+    
+    if [ "$java_version" = "8" ]; then
+        wget -O /tmp/java8.tar.gz "$JAVA_8_URL" || {
+            echo -e "${RED}❌ Erro ao baixar Java 8${NC}"
+            return 1
+        }
+        tar -xzf /tmp/java8.tar.gz -C "$java_dir" --strip-components=1
+    elif [ "$java_version" = "17" ]; then
+        wget -O /tmp/java17.tar.gz "$JAVA_17_URL" || {
+            echo -e "${RED}❌ Erro ao baixar Java 17${NC}"
+            return 1
+        }
+        tar -xzf /tmp/java17.tar.gz -C "$java_dir" --strip-components=1
+    fi
+    
+    rm -f /tmp/java*.tar.gz
+    echo -e "${GREEN}✅ Java $java_version instalado${NC}"
+}
+
+# Função para criar servidor Vanilla
+create_vanilla_server() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║         ${WHITE}SERVIDOR MINECRAFT VANILLA${BLUE}      ║${NC}"
+    echo -e "${BLUE}║              ${CYAN}Usuário: $USERNAME${BLUE}             ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -ne "${YELLOW}Nome do seu servidor: ${NC}"
+    read -r server_name
+    
+    # Validar nome do servidor
+    if [[ ! "$server_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo -e "${RED}❌ Nome inválido! Use apenas letras, números, _ e -${NC}"
+        pause
+        return 1
+    fi
+    
+    echo -ne "${YELLOW}Versão do Minecraft (ex: 1.20.4): ${NC}"
+    read -r mc_version
+    
+    # Sugerir porta única para o usuário
+    local suggested_port=$(get_next_port)
+    echo -ne "${YELLOW}Porta do servidor ($suggested_port): ${NC}"
+    read -r server_port
+    server_port=${server_port:-$suggested_port}
+    
+    echo -ne "${YELLOW}RAM para o servidor (2048M): ${NC}"
+    read -r server_ram
+    server_ram=${server_ram:-2048M}
+    
+    # Criar servidor com ID único do usuário
+    local server_dir="$MINECRAFT_DIR/vanilla-$server_name-$(date +%s)"
+    mkdir -p "$server_dir"
+    
+    # Instalar Java 17
+    install_java "17"
+    
+    # Baixar servidor
+    echo -e "${CYAN}📦 Baixando servidor Vanilla $mc_version para $USERNAME...${NC}"
+    local jar_url="https://papermc.io/api/v2/projects/paper/versions/$mc_version/builds"
+    local latest_build=$(wget -qO- "$jar_url" | grep -o '"build":[0-9]*' | tail -1 | cut -d':' -f2)
+    
+    if [ -z "$latest_build" ]; then
+        echo -e "${RED}❌ Versão não encontrada. Usando servidor oficial...${NC}"
+        wget -O "$server_dir/server.jar" "https://launcher.mojang.com/v1/objects/$(wget -qO- "https://launchermeta.mojang.com/mc/game/version_manifest.json" | grep -A 10 "\"id\": \"$mc_version\"" | grep -o '"url": "[^"]*"' | head -1 | cut -d'"' -f4 | xargs wget -qO- | grep -o '"server": {"url": "[^"]*"' | cut -d'"' -f6)/server.jar" || {
+            echo -e "${RED}❌ Erro ao baixar servidor${NC}"
+            return 1
+        }
+    else
+        wget -O "$server_dir/server.jar" "https://papermc.io/api/v2/projects/paper/versions/$mc_version/builds/$latest_build/downloads/paper-$mc_version-$latest_build.jar" || {
+            echo -e "${RED}❌ Erro ao baixar Paper. Tentando servidor oficial...${NC}"
+            wget -O "$server_dir/server.jar" "https://launcher.mojang.com/v1/objects/server.jar"
+        }
+    fi
+    
+    # Criar configurações
+    create_server_configs "$server_dir" "$server_port" "$server_name" "$USERNAME"
+    
+    # Criar script de inicialização
+    cat > "$server_dir/start.sh" << EOF
+#!/bin/bash
+cd "\$(dirname "\$0")"
+export PATH="$MINECRAFT_DIR/java17/bin:\$PATH"
+echo "Iniciando servidor de $USERNAME: $server_name"
+echo "Porta: $server_port | RAM: $server_ram"
+java -Xmx$server_ram -Xms1024M -jar server.jar nogui
+EOF
+    
+    chmod +x "$server_dir/start.sh"
+    
+    # Criar arquivo de informações do servidor
+    cat > "$server_dir/server_info.txt" << EOF
+# Informações do Servidor
+OWNER=$USERNAME
+SERVER_NAME=$server_name
+SERVER_TYPE=vanilla
+MC_VERSION=$mc_version
+SERVER_PORT=$server_port
+SERVER_RAM=$server_ram
+CREATED_DATE=$(date '+%Y-%m-%d %H:%M:%S')
+LOCATION=$server_dir
+EOF
+    
+    # Incrementar contador
+    increment_server_count
+    
+    # Perguntar sobre configuração de acesso público
+    echo -e "\n${CYAN}🌐 Configurar acesso público para o servidor?${NC}"
+    echo -ne "${YELLOW}Configurar túnel SSH ou acesso externo? (y/N): ${NC}"
+    read -r setup_public
+    
+    if [[ $setup_public =~ ^[Yy]$ ]]; then
+        setup_ssh_tunnel "$server_name" "$server_port" "vanilla"
+    fi
+    
+    echo -e "\n${GREEN}✅ Servidor Vanilla criado com sucesso para $USERNAME!${NC}"
+    echo -e "${YELLOW}📋 Informações do seu servidor:${NC}"
+    echo -e "${WHITE}   • Proprietário: ${CYAN}$USERNAME${NC}"
+    echo -e "${WHITE}   • Nome: ${CYAN}$server_name${NC}"
+    echo -e "${WHITE}   • Versão: ${CYAN}$mc_version${NC}"
+    echo -e "${WHITE}   • Porta local: ${CYAN}$server_port${NC}"
+    echo -e "${WHITE}   • RAM: ${CYAN}$server_ram${NC}"
+    echo -e "${WHITE}   • Localização: ${CYAN}$server_dir${NC}"
+    echo -e "${WHITE}   • Iniciar: ${CYAN}./start.sh${NC}"
+    
+    # Mostrar informações de rede
+    echo -e "\n${CYAN}🌐 Informações de Rede:${NC}"
+    echo -e "${WHITE}   • IP local: ${CYAN}$LOCAL_IP:$server_port${NC}"
+    if [ -n "$PUBLIC_IP" ]; then
+        echo -e "${WHITE}   • IP público: ${CYAN}$PUBLIC_IP:$server_port${NC} ${YELLOW}(requer port forwarding)${NC}"
+    fi
+    if [ -n "$SSH_CONNECTION_INFO" ]; then
+        echo -e "${WHITE}   • Conexão SSH: ${CYAN}$SSH_CONNECTION_INFO${NC}"
+    fi
+    echo
+    echo -e "${BLUE}💡 Seu servidor é privado e isolado de outros usuários!${NC}"
+    
+    pause
+}
+
+# Função para criar servidor PocketMine
+create_pocketmine_server() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║         ${WHITE}SERVIDOR POCKETMINE-MP${BLUE}         ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -ne "${YELLOW}Nome do servidor: ${NC}"
+    read -r server_name
+    
+    echo -ne "${YELLOW}Porta do servidor (19132): ${NC}"
+    read -r server_port
+    server_port=${server_port:-19132}
+    
+    local server_dir="$MINECRAFT_DIR/pocketmine-$server_name"
+    mkdir -p "$server_dir"
+    
+    # Baixar PocketMine-MP
+    echo -e "${CYAN}📦 Baixando PocketMine-MP...${NC}"
+    wget -O "$server_dir/PocketMine-MP.phar" "https://github.com/pmmp/PocketMine-MP/releases/latest/download/PocketMine-MP.phar" || {
+        echo -e "${RED}❌ Erro ao baixar PocketMine-MP${NC}"
+        return 1
+    }
+    
+    # Baixar PHP binário para PocketMine
+    echo -e "${CYAN}📦 Baixando PHP para PocketMine...${NC}"
+    local php_url="https://github.com/pmmp/PHP-Binaries/releases/latest/download/PHP-Linux-x86_64.tar.gz"
+    wget -O /tmp/php-pocketmine.tar.gz "$php_url" || {
+        echo -e "${RED}❌ Erro ao baixar PHP${NC}"
+        return 1
+    }
+    
+    tar -xzf /tmp/php-pocketmine.tar.gz -C "$server_dir"
+    rm -f /tmp/php-pocketmine.tar.gz
+    
+    # Criar configuração do servidor
+    cat > "$server_dir/server.properties" << EOF
+motd=$server_name
+server-port=$server_port
+white-list=off
+announce-player-achievements=on
+spawn-protection=16
+max-players=20
+gamemode=0
+force-gamemode=off
+hardcore=off
+pvp=on
+difficulty=1
+generator-settings=
+level-name=world
+level-seed=
+level-type=DEFAULT
+enable-query=on
+enable-rcon=off
+enable-command-block=off
+EOF
+    
+    # Criar script de inicialização
+    cat > "$server_dir/start.sh" << EOF
+#!/bin/bash
+cd "\$(dirname "\$0")"
+./bin/php7/bin/php PocketMine-MP.phar
+EOF
+    
+    chmod +x "$server_dir/start.sh"
+    
+    echo -e "\n${GREEN}✅ Servidor PocketMine-MP criado com sucesso!${NC}"
+    echo -e "${YELLOW}📋 Informações do servidor:${NC}"
+    echo -e "${WHITE}   • Nome: ${CYAN}$server_name${NC}"
+    echo -e "${WHITE}   • Tipo: ${CYAN}PocketMine-MP (Bedrock)${NC}"
+    echo -e "${WHITE}   • Porta: ${CYAN}$server_port${NC}"
+    echo -e "${WHITE}   • Localização: ${CYAN}$server_dir${NC}"
+    echo -e "${WHITE}   • Iniciar: ${CYAN}./start.sh${NC}"
+    
+    pause
+}
+
+# Função para criar servidor Nukkit
+create_nukkit_server() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║           ${WHITE}SERVIDOR NUKKIT${BLUE}              ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -ne "${YELLOW}Nome do servidor: ${NC}"
+    read -r server_name
+    
+    echo -ne "${YELLOW}Porta do servidor (19132): ${NC}"
+    read -r server_port
+    server_port=${server_port:-19132}
+    
+    echo -ne "${YELLOW}RAM para o servidor (1024M): ${NC}"
+    read -r server_ram
+    server_ram=${server_ram:-1024M}
+    
+    local server_dir="$MINECRAFT_DIR/nukkit-$server_name"
+    mkdir -p "$server_dir"
+    
+    # Instalar Java 8
+    install_java "8"
+    
+    # Baixar Nukkit
+    echo -e "${CYAN}📦 Baixando Nukkit...${NC}"
+    wget -O "$server_dir/nukkit.jar" "https://ci.opencollab.dev/job/NukkitX/job/Nukkit/job/master/lastSuccessfulBuild/artifact/target/nukkit-1.0-SNAPSHOT.jar" || {
+        echo -e "${YELLOW}⚠️  Tentando build alternativo...${NC}"
+        wget -O "$server_dir/nukkit.jar" "https://github.com/CloudburstMC/Nukkit/releases/latest/download/nukkit.jar" || {
+            echo -e "${RED}❌ Erro ao baixar Nukkit${NC}"
+            return 1
+        }
+    }
+    
+    # Criar configuração do servidor
+    cat > "$server_dir/server.properties" << EOF
+motd=$server_name
+server-port=$server_port
+white-list=off
+announce-player-achievements=on
+spawn-protection=16
+max-players=20
+gamemode=0
+force-gamemode=off
+hardcore=off
+pvp=on
+difficulty=1
+generator-settings=
+level-name=world
+level-seed=
+level-type=DEFAULT
+enable-query=on
+enable-rcon=off
+view-distance=10
+EOF
+    
+    # Criar script de inicialização
+    cat > "$server_dir/start.sh" << EOF
+#!/bin/bash
+cd "\$(dirname "\$0")"
+export PATH="$MINECRAFT_DIR/java8/bin:\$PATH"
+java -Xmx$server_ram -Xms512M -jar nukkit.jar
+EOF
+    
+    chmod +x "$server_dir/start.sh"
+    
+    echo -e "\n${GREEN}✅ Servidor Nukkit criado com sucesso!${NC}"
+    echo -e "${YELLOW}📋 Informações do servidor:${NC}"
+    echo -e "${WHITE}   • Nome: ${CYAN}$server_name${NC}"
+    echo -e "${WHITE}   • Tipo: ${CYAN}Nukkit (Bedrock)${NC}"
+    echo -e "${WHITE}   • Porta: ${CYAN}$server_port${NC}"
+    echo -e "${WHITE}   • RAM: ${CYAN}$server_ram${NC}"
+    echo -e "${WHITE}   • Localização: ${CYAN}$server_dir${NC}"
+    echo -e "${WHITE}   • Iniciar: ${CYAN}./start.sh${NC}"
+    
+    pause
+}
+
+# Função para criar servidor Forge
+create_forge_server() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║          ${WHITE}SERVIDOR MINECRAFT FORGE${BLUE}       ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -ne "${YELLOW}Nome do servidor: ${NC}"
+    read -r server_name
+    
+    echo -ne "${YELLOW}Versão do Minecraft (ex: 1.20.1): ${NC}"
+    read -r mc_version
+    
+    echo -ne "${YELLOW}Versão do Forge (pressione ENTER para a mais recente): ${NC}"
+    read -r forge_version
+    
+    echo -ne "${YELLOW}Porta do servidor (25565): ${NC}"
+    read -r server_port
+    server_port=${server_port:-25565}
+    
+    echo -ne "${YELLOW}RAM para o servidor (4096M): ${NC}"
+    read -r server_ram
+    server_ram=${server_ram:-4096M}
+    
+    local server_dir="$MINECRAFT_DIR/forge-$server_name"
+    mkdir -p "$server_dir"
+    
+    # Instalar Java 17
+    install_java "17"
+    
+    # Determinar versão do Forge
+    if [ -z "$forge_version" ]; then
+        echo -e "${CYAN}🔍 Buscando última versão do Forge para $mc_version...${NC}"
+        forge_version=$(wget -qO- "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json" | grep -o "\"$mc_version-[^\"]*" | head -1 | cut -d'"' -f2)
+        
+        if [ -z "$forge_version" ]; then
+            echo -e "${RED}❌ Versão do Forge não encontrada para $mc_version${NC}"
+            return 1
+        fi
+    fi
+    
+    # Baixar instalador do Forge
+    echo -e "${CYAN}📦 Baixando Forge $forge_version...${NC}"
+    local forge_url="https://maven.minecraftforge.net/net/minecraftforge/forge/$forge_version/forge-$forge_version-installer.jar"
+    wget -O "$server_dir/forge-installer.jar" "$forge_url" || {
+        echo -e "${RED}❌ Erro ao baixar Forge${NC}"
+        return 1
+    }
+    
+    # Instalar servidor Forge
+    echo -e "${CYAN}🔧 Instalando servidor Forge...${NC}"
+    cd "$server_dir"
+    export PATH="$MINECRAFT_DIR/java17/bin:$PATH"
+    java -jar forge-installer.jar --installServer || {
+        echo -e "${RED}❌ Erro ao instalar servidor Forge${NC}"
+        return 1
+    }
+    
+    # Encontrar o JAR do servidor
+    local server_jar=$(find . -name "forge-*-server.jar" -o -name "minecraft_server*.jar" | head -1)
+    if [ -z "$server_jar" ]; then
+        server_jar="server.jar"
+    fi
+    
+    # Aceitar EULA
+    echo "eula=true" > eula.txt
+    
+    # Criar configurações
+    create_server_configs "$server_dir" "$server_port" "$server_name"
+    
+    # Criar script de inicialização
+    cat > "$server_dir/start.sh" << EOF
+#!/bin/bash
+cd "\$(dirname "\$0")"
+export PATH="$MINECRAFT_DIR/java17/bin:\$PATH"
+java -Xmx$server_ram -Xms1024M -jar $server_jar nogui
+EOF
+    
+    chmod +x "$server_dir/start.sh"
+    
+    # Criar pasta de mods
+    mkdir -p "$server_dir/mods"
+    echo "# Coloque seus mods (.jar) nesta pasta" > "$server_dir/mods/README.txt"
+    
+    echo -e "\n${GREEN}✅ Servidor Forge criado com sucesso!${NC}"
+    echo -e "${YELLOW}📋 Informações do servidor:${NC}"
+    echo -e "${WHITE}   • Nome: ${CYAN}$server_name${NC}"
+    echo -e "${WHITE}   • Versão MC: ${CYAN}$mc_version${NC}"
+    echo -e "${WHITE}   • Versão Forge: ${CYAN}$forge_version${NC}"
+    echo -e "${WHITE}   • Porta: ${CYAN}$server_port${NC}"
+    echo -e "${WHITE}   • RAM: ${CYAN}$server_ram${NC}"
+    echo -e "${WHITE}   • Localização: ${CYAN}$server_dir${NC}"
+    echo -e "${WHITE}   • Mods: ${CYAN}$server_dir/mods/${NC}"
+    echo -e "${WHITE}   • Iniciar: ${CYAN}./start.sh${NC}"
+    
+    pause
+}
+
+# Função para criar servidor Bedrock oficial
+create_bedrock_server() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║        ${WHITE}SERVIDOR BEDROCK OFICIAL${BLUE}        ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -ne "${YELLOW}Nome do servidor: ${NC}"
+    read -r server_name
+    
+    echo -ne "${YELLOW}Porta do servidor (19132): ${NC}"
+    read -r server_port
+    server_port=${server_port:-19132}
+    
+    local server_dir="$MINECRAFT_DIR/bedrock-$server_name"
+    mkdir -p "$server_dir"
+    
+    # Baixar servidor Bedrock
+    echo -e "${CYAN}📦 Baixando servidor Bedrock oficial...${NC}"
+    local bedrock_url="https://minecraft.azureedge.net/bin-linux/bedrock-server-$(wget -qO- 'https://www.minecraft.net/en-us/download/server/bedrock' | grep -o 'bedrock-server-[0-9.]*\.zip' | head -1 | cut -d'-' -f3)"
+    
+    if [[ "$bedrock_url" == *"bedrock-server-.zip" ]]; then
+        # Fallback para versão conhecida
+        bedrock_url="https://minecraft.azureedge.net/bin-linux/bedrock-server-1.20.51.01.zip"
+    fi
+    
+    wget -O "$server_dir/bedrock-server.zip" "$bedrock_url" || {
+        echo -e "${RED}❌ Erro ao baixar servidor Bedrock${NC}"
+        return 1
+    }
+    
+    # Extrair servidor
+    cd "$server_dir"
+    unzip -o bedrock-server.zip
+    rm bedrock-server.zip
+    
+    # Tornar o servidor executável
+    chmod +x bedrock_server
+    
+    # Configurar servidor
+    sed -i "s/server-name=.*/server-name=$server_name/" server.properties
+    sed -i "s/server-port=.*/server-port=$server_port/" server.properties
+    sed -i "s/max-players=.*/max-players=20/" server.properties
+    sed -i "s/gamemode=.*/gamemode=survival/" server.properties
+    sed -i "s/difficulty=.*/difficulty=easy/" server.properties
+    
+    # Criar script de inicialização
+    cat > "$server_dir/start.sh" << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+export LD_LIBRARY_PATH=.
+./bedrock_server
+EOF
+    
+    chmod +x "$server_dir/start.sh"
+    
+    echo -e "\n${GREEN}✅ Servidor Bedrock criado com sucesso!${NC}"
+    echo -e "${YELLOW}📋 Informações do servidor:${NC}"
+    echo -e "${WHITE}   • Nome: ${CYAN}$server_name${NC}"
+    echo -e "${WHITE}   • Tipo: ${CYAN}Bedrock Oficial${NC}"
+    echo -e "${WHITE}   • Porta: ${CYAN}$server_port${NC}"
+    echo -e "${WHITE}   • Localização: ${CYAN}$server_dir${NC}"
+    echo -e "${WHITE}   • Iniciar: ${CYAN}./start.sh${NC}"
+    
+    pause
+}
+
+# Função para criar configurações básicas do servidor
+create_server_configs() {
+    local server_dir="$1"
+    local server_port="$2"
+    local server_name="$3"
+    local owner="$4"
+    
+    # server.properties com identificação do proprietário
+    cat > "$server_dir/server.properties" << EOF
+# Servidor Minecraft - Proprietário: $owner
+# Criado em: $(date)
+enable-jmx-monitoring=false
+rcon.port=25575
+level-seed=
+gamemode=survival
+enable-command-block=false
+enable-query=false
+generator-settings=
+level-name=world-$owner
+motd=$server_name (Owner: $owner)
+query.port=$server_port
+pvp=true
+generate-structures=true
+difficulty=easy
+network-compression-threshold=256
+max-tick-time=60000
+require-resource-pack=false
+use-native-transport=true
+max-players=20
+online-mode=true
+enable-status=true
+allow-flight=false
+broadcast-rcon-to-ops=true
+view-distance=10
+server-ip=
+resource-pack-prompt=
+allow-nether=true
+server-port=$server_port
+enable-rcon=false
+sync-chunk-writes=true
+op-permission-level=4
+prevent-proxy-connections=false
+hide-online-players=false
+resource-pack=
+entity-broadcast-range-percentage=100
+simulation-distance=10
+rcon.password=
+player-idle-timeout=0
+debug=false
+force-gamemode=false
+rate-limit=0
+hardcore=false
+white-list=false
+broadcast-console-to-ops=true
+spawn-npcs=true
+spawn-animals=true
+snooper-enabled=true
+function-permission-level=2
+level-type=default
+text-filtering-config=
+spawn-monsters=true
+enforce-whitelist=false
+spawn-protection=16
+resource-pack-sha1=
+max-world-size=29999984
+EOF
+    
+    # eula.txt
+    echo "eula=true" > "$server_dir/eula.txt"
+    
+    # ops.json (vazio inicialmente)
+    echo "[]" > "$server_dir/ops.json"
+    
+    # whitelist.json (vazio inicialmente)  
+    echo "[]" > "$server_dir/whitelist.json"
+    
+    # Criar arquivo README personalizado
+    cat > "$server_dir/README.txt" << EOF
+===========================================
+SERVIDOR MINECRAFT - PROPRIETÁRIO: $owner
+===========================================
+
+Nome do Servidor: $server_name
+Proprietário: $owner
+Criado em: $(date)
+Porta: $server_port
+
+COMO USAR:
+1. Para iniciar o servidor: ./start.sh
+2. Para parar: Ctrl+C no terminal ou kill <PID>
+3. Para conectar: use o IP do servidor e porta $server_port
+
+ARQUIVOS IMPORTANTES:
+- server.properties: Configurações do servidor
+- ops.json: Lista de operadores
+- whitelist.json: Lista de jogadores permitidos
+- world-$owner/: Pasta do mundo (privada)
+
+IMPORTANTE: Este servidor é privado e isolado.
+Apenas você ($owner) pode gerenciá-lo.
+===========================================
+EOF
+}
+
+# Função para listar servidores
+list_servers() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║           ${WHITE}SERVIDORES CRIADOS${BLUE}            ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    if [ ! -d "$MINECRAFT_DIR" ] || [ -z "$(ls -A "$MINECRAFT_DIR" 2>/dev/null | grep -E '^(vanilla|pocketmine|nukkit|forge|bedrock)-')" ]; then
+        echo -e "${YELLOW}📭 Nenhum servidor encontrado${NC}"
+        pause
+        return
+    fi
+    
+    echo -e "${CYAN}📋 Servidores disponíveis:${NC}"
+    echo
+    
+    local count=0
+    for server_path in "$MINECRAFT_DIR"/*; do
+        if [ -d "$server_path" ] && [[ "$(basename "$server_path")" =~ ^(vanilla|pocketmine|nukkit|forge|bedrock)- ]]; then
+            ((count++))
+            local server_name=$(basename "$server_path")
+            local server_type=${server_name%%-*}
+            local display_name=${server_name#*-}
+            
+            # Verificar se está rodando
+            local status="${RED}⚪ Parado${NC}"
+            if pgrep -f "$server_path" >/dev/null; then
+                status="${GREEN}🟢 Rodando${NC}"
+            fi
+            
+            # Determinar porta
+            local port="N/A"
+            if [ -f "$server_path/server.properties" ]; then
+                port=$(grep "server-port=" "$server_path/server.properties" | cut -d'=' -f2)
+            fi
+            
+            # Ler informações do arquivo server_info.txt se existir
+            local created_date="N/A"
+            if [ -f "$server_path/server_info.txt" ]; then
+                created_date=$(grep "CREATED_DATE=" "$server_path/server_info.txt" | cut -d'=' -f2)
+            fi
+            
+            echo -e "${WHITE}$count) ${CYAN}$display_name${NC}"
+            echo -e "   ${WHITE}Tipo: ${YELLOW}$(echo $server_type | tr '[:lower:]' '[:upper:]')${NC}"
+            echo -e "   ${WHITE}Status: $status"
+            echo -e "   ${WHITE}Porta: ${CYAN}$port${NC}"
+            echo -e "   ${WHITE}Criado: ${CYAN}$created_date${NC}"
+            echo -e "   ${WHITE}Pasta: ${CYAN}$server_path${NC}"
+            echo
+        fi
+    done
+    
+    if [ $count -eq 0 ]; then
+        echo -e "${YELLOW}📭 Nenhum servidor encontrado em seu diretório${NC}"
+    else
+        echo -e "${GREEN}✅ Total: $count servidor(es) encontrado(s)${NC}"
+    fi
+    
+    pause
+}
+
+# Função para gerenciar servidores
+manage_servers() {
+    while true; do
+        show_logo
+        echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║        ${WHITE}GERENCIAR SEUS SERVIDORES${BLUE}        ║${NC}"
+        echo -e "${BLUE}║              ${CYAN}Usuário: $USERNAME${BLUE}             ║${NC}"
+        echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+        echo
+        
+        # Listar apenas servidores do usuário atual
+        local servers=()
+        local count=0
+        
+        for server_path in "$MINECRAFT_DIR"/*; do
+            if [ -d "$server_path" ] && [[ "$(basename "$server_path")" =~ ^(vanilla|pocketmine|nukkit|forge|bedrock)- ]]; then
+                # Verificar se o servidor pertence ao usuário atual
+                local server_owner="unknown"
+                if [ -f "$server_path/server_info.txt" ]; then
+                    server_owner=$(grep "OWNER=" "$server_path/server_info.txt" | cut -d'=' -f2)
+                fi
+                
+                # Só mostrar servidores do usuário atual ou sem proprietário definido
+                if [ "$server_owner" = "$USERNAME" ] || [ "$server_owner" = "unknown" ]; then
+                    ((count++))
+                    servers+=("$server_path")
+                    local server_name=$(basename "$server_path")
+                    local server_type=${server_name%%-*}
+                    local display_name=${server_name#*-}
+                    
+                    # Status do servidor
+                    local status="${RED}⚪${NC}"
+                    if pgrep -f "$server_path" >/dev/null; then
+                        status="${GREEN}🟢${NC}"
+                    fi
+                    
+                    # Mostrar informações básicas
+                    local port="N/A"
+                    if [ -f "$server_path/server.properties" ]; then
+                        port=$(grep "server-port=" "$server_path/server.properties" | cut -d'=' -f2)
+                    fi
+                    
+                    echo -e "${WHITE}$count) $status ${CYAN}$display_name${NC} ${YELLOW}($server_type)${NC} ${WHITE}:$port${NC}"
+                fi
+            fi
+        done
+        
+        if [ $count -eq 0 ]; then
+            echo -e "${YELLOW}📭 Você não possui servidores ainda${NC}"
+            echo -e "${CYAN}💡 Volte ao menu principal para criar seu primeiro servidor!${NC}"
+            echo -e "${WHITE}0) ${WHITE}Voltar ao Menu Principal${NC}"
+            echo
+            echo -ne "${YELLOW}Escolha uma opção: ${NC}"
+            read -r choice
+            if [ "$choice" = "0" ]; then
+                break
+            fi
+            continue
+        fi
+        
+        echo
+        echo -e "${WHITE}Ações rápidas:${NC}"
+        echo -e "${WHITE}$((count+1))) ${GREEN}🚀 Iniciar Servidor${NC}"
+        echo -e "${WHITE}$((count+2))) ${YELLOW}🛑 Parar Servidor${NC}"
+        echo -e "${WHITE}$((count+3))) ${PURPLE}📋 Ver Logs${NC}"
+        echo -e "${WHITE}$((count+4))) ${CYAN}📂 Abrir Pasta${NC}"
+        echo -e "${WHITE}$((count+5))) ${RED}🗑️  Deletar Servidor${NC}"
+        echo -e "${WHITE}$((count+6))) ${BLUE}📊 Estatísticas Detalhadas${NC}"
+        echo -e "${WHITE}0) ${WHITE}Voltar ao Menu Principal${NC}"
+        echo
+        echo -ne "${YELLOW}Escolha uma opção: ${NC}"
+        read -r choice
+        
+        if [ "$choice" = "0" ]; then
+            break
+        elif [ "$choice" -gt 0 ] && [ "$choice" -le "$count" ]; then
+            local selected_server="${servers[$((choice-1))]}"
+            server_details_menu "$selected_server"
+        elif [ "$choice" = "$((count+1))" ]; then
+            start_server_menu "${servers[@]}"
+        elif [ "$choice" = "$((count+2))" ]; then
+            stop_server_menu "${servers[@]}"
+        elif [ "$choice" = "$((count+3))" ]; then
+            view_logs_menu "${servers[@]}"
+        elif [ "$choice" = "$((count+4))" ]; then
+            open_folder_menu "${servers[@]}"
+        elif [ "$choice" = "$((count+5))" ]; then
+            delete_server_menu "${servers[@]}"
+        elif [ "$choice" = "$((count+6))" ]; then
+            show_user_statistics
+        else
+            echo -e "${RED}Opção inválida!${NC}"
+            sleep 1
+        fi
+    done
+}
+
+# Função para mostrar estatísticas detalhadas do usuário
+show_user_statistics() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║       ${WHITE}ESTATÍSTICAS - ${CYAN}$USERNAME${BLUE}          ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    # Ler configurações do usuário
+    local total_servers=$(grep "TOTAL_SERVERS=" "$USER_CONFIG_FILE" 2>/dev/null | cut -d'=' -f2 || echo "0")
+    local creation_date=$(grep "CREATION_DATE=" "$USER_CONFIG_FILE" 2>/dev/null | cut -d'=' -f2 || echo "Desconhecido")
+    local last_access=$(grep "LAST_ACCESS=" "$USER_CONFIG_FILE" 2>/dev/null | cut -d'=' -f2 || echo "Agora")
+    local user_id=$(id -u)
+    
+    echo -e "${CYAN}👤 Informações do Usuário:${NC}"
+    echo -e "${WHITE}   • Nome: ${CYAN}$USERNAME${NC}"
+    echo -e "${WHITE}   • User ID: ${CYAN}$user_id${NC}"
+    echo -e "${WHITE}   • Membro desde: ${CYAN}$creation_date${NC}"
+    echo -e "${WHITE}   • Último acesso: ${CYAN}$last_access${NC}"
+    echo
+    
+    echo -e "${CYAN}📊 Estatísticas de Servidores:${NC}"
+    echo -e "${WHITE}   • Total criados: ${GREEN}$total_servers${NC}"
+    
+    # Contar servidores ativos
+    local active_servers=0
+    local server_types=()
+    
+    for server_path in "$MINECRAFT_DIR"/*; do
+        if [ -d "$server_path" ] && [[ "$(basename "$server_path")" =~ ^(vanilla|pocketmine|nukkit|forge|bedrock)- ]]; then
+            local server_owner="unknown"
+            if [ -f "$server_path/server_info.txt" ]; then
+                server_owner=$(grep "OWNER=" "$server_path/server_info.txt" | cut -d'=' -f2)
+            fi
+            
+            if [ "$server_owner" = "$USERNAME" ] || [ "$server_owner" = "unknown" ]; then
+                if pgrep -f "$server_path" >/dev/null; then
+                    ((active_servers++))
+                fi
+                
+                # Contar tipos de servidor
+                local server_name=$(basename "$server_path")
+                local server_type=${server_name%%-*}
+                server_types+=("$server_type")
+            fi
+        fi
+    done
+    
+    echo -e "${WHITE}   • Servidores rodando: ${GREEN}$active_servers${NC}"
+    echo
+    
+    # Mostrar tipos de servidores
+    if [ ${#server_types[@]} -gt 0 ]; then
+        echo -e "${CYAN}🎮 Tipos de Servidores:${NC}"
+        echo "${server_types[@]}" | tr ' ' '\n' | sort | uniq -c | while read count type; do
+            echo -e "${WHITE}   • $(echo $type | tr '[:lower:]' '[:upper:]'): ${CYAN}$count${NC}"
+        done
+        echo
+    fi
+    
+    echo -e "${CYAN}📂 Diretórios:${NC}"
+    echo -e "${WHITE}   • Pasta pessoal: ${CYAN}$MINECRAFT_DIR${NC}"
+    if [ -d "$MINECRAFT_DIR" ]; then
+        local dir_size=$(du -sh "$MINECRAFT_DIR" 2>/dev/null | cut -f1)
+        echo -e "${WHITE}   • Espaço usado: ${CYAN}$dir_size${NC}"
+    fi
+    
+    # Mostrar portas em uso
+    echo -e "\n${CYAN}🔌 Portas em Uso:${NC}"
+    for server_path in "$MINECRAFT_DIR"/*; do
+        if [ -d "$server_path" ] && [ -f "$server_path/server.properties" ]; then
+            local server_owner="unknown"
+            if [ -f "$server_path/server_info.txt" ]; then
+                server_owner=$(grep "OWNER=" "$server_path/server_info.txt" | cut -d'=' -f2)
+            fi
+            
+            if [ "$server_owner" = "$USERNAME" ] || [ "$server_owner" = "unknown" ]; then
+                local port=$(grep "server-port=" "$server_path/server.properties" | cut -d'=' -f2)
+                local server_name=$(basename "$server_path")
+                local display_name=${server_name#*-}
+                echo -e "${WHITE}   • $display_name: ${CYAN}$port${NC}"
+            fi
+        fi
+    done
+    
+    pause
+}
+
+# Função para menu de detalhes do servidor
+server_details_menu() {
+    local server_path="$1"
+    local server_name=$(basename "$server_path")
+    local server_type=${server_name%%-*}
+    local display_name=${server_name#*-}
+    
+    while true; do
+        show_logo
+        echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║       ${WHITE}GERENCIAR: $display_name${BLUE}       ║${NC}"
+        echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+        echo
+        
+        # Status do servidor
+        local status="${RED}⚪ Parado${NC}"
+        local pid=""
+        if pid=$(pgrep -f "$server_path"); then
+            status="${GREEN}🟢 Rodando (PID: $pid)${NC}"
+        fi
+        
+        # Informações do servidor
+        local port="N/A"
+        if [ -f "$server_path/server.properties" ]; then
+            port=$(grep "server-port=" "$server_path/server.properties" | cut -d'=' -f2 2>/dev/null || echo "N/A")
+        fi
+        
+        echo -e "${CYAN}📊 Informações do Servidor:${NC}"
+        echo -e "${WHITE}   • Nome: ${CYAN}$display_name${NC}"
+        echo -e "${WHITE}   • Tipo: ${YELLOW}$(echo $server_type | tr '[:lower:]' '[:upper:]')${NC}"
+        echo -e "${WHITE}   • Status: $status"
+        echo -e "${WHITE}   • Porta: ${CYAN}$port${NC}"
+        echo -e "${WHITE}   • Pasta: ${CYAN}$server_path${NC}"
+        echo
+        
+        echo -e "${WHITE}1) ${GREEN}Iniciar Servidor${NC}"
+        echo -e "${WHITE}2) ${YELLOW}Parar Servidor${NC}"
+        echo -e "${WHITE}3) ${PURPLE}Ver Logs em Tempo Real${NC}"
+        echo -e "${WHITE}4) ${CYAN}Abrir Pasta do Servidor${NC}"
+        echo -e "${WHITE}5) ${BLUE}Editar Configurações${NC}"
+        echo -e "${WHITE}6) ${RED}Deletar Servidor${NC}"
+        echo -e "${WHITE}0) ${WHITE}Voltar${NC}"
+        echo
+        echo -ne "${YELLOW}Escolha uma opção: ${NC}"
+        read -r choice
+        
+        case $choice in
+            1) start_server "$server_path" ;;
+            2) stop_server "$server_path" ;;
+            3) view_server_logs "$server_path" ;;
+            4) open_server_folder "$server_path" ;;
+            5) edit_server_config "$server_path" ;;
+            6) 
+                delete_server "$server_path"
+                if [ $? -eq 0 ]; then
+                    break
+                fi
+                ;;
+            0) break ;;
+            *) 
+                echo -e "${RED}Opção inválida!${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Função para iniciar servidor
+start_server() {
+    local server_path="$1"
+    local server_name=$(basename "$server_path")
+    
+    if pgrep -f "$server_path" >/dev/null; then
+        echo -e "${YELLOW}⚠️  Servidor já está rodando!${NC}"
+        pause
+        return
+    fi
+    
+    echo -e "${CYAN}🚀 Iniciando servidor $server_name...${NC}"
+    
+    if [ -f "$server_path/start.sh" ]; then
+        cd "$server_path"
+        nohup ./start.sh > server.log 2>&1 &
+        local pid=$!
+        echo $pid > server.pid
+        
+        sleep 3
+        
+        if kill -0 $pid 2>/dev/null; then
+            echo -e "${GREEN}✅ Servidor iniciado com sucesso! (PID: $pid)${NC}"
+            echo -e "${CYAN}📋 Para ver os logs: tail -f $server_path/server.log${NC}"
+        else
+            echo -e "${RED}❌ Erro ao iniciar servidor${NC}"
+            echo -e "${YELLOW}📋 Verificando logs...${NC}"
+            tail -10 "$server_path/server.log" 2>/dev/null || echo "Nenhum log encontrado"
+        fi
+    else
+        echo -e "${RED}❌ Script de inicialização não encontrado!${NC}"
+    fi
+    
+    pause
+}
+
+# Função para parar servidor
+stop_server() {
+    local server_path="$1"
+    local server_name=$(basename "$server_path")
+    
+    local pid=$(pgrep -f "$server_path")
+    if [ -z "$pid" ]; then
+        echo -e "${YELLOW}⚠️  Servidor não está rodando${NC}"
+        pause
+        return
+    fi
+    
+    echo -e "${CYAN}🛑 Parando servidor $server_name...${NC}"
+    
+    # Tentar parar graciosamente
+    kill $pid
+    sleep 5
+    
+    # Verificar se parou
+    if kill -0 $pid 2>/dev/null; then
+        echo -e "${YELLOW}⚠️  Forçando parada...${NC}"
+        kill -9 $pid
+        sleep 2
+    fi
+    
+    # Remover arquivo PID se existir
+    [ -f "$server_path/server.pid" ] && rm "$server_path/server.pid"
+    
+    if ! kill -0 $pid 2>/dev/null; then
+        echo -e "${GREEN}✅ Servidor parado com sucesso!${NC}"
+    else
+        echo -e "${RED}❌ Erro ao parar servidor${NC}"
+    fi
+    
+    pause
+}
+
+# Função para ver logs
+view_server_logs() {
+    local server_path="$1"
+    local server_name=$(basename "$server_path")
+    
+    if [ ! -f "$server_path/server.log" ]; then
+        echo -e "${YELLOW}📭 Nenhum log encontrado para $server_name${NC}"
+        pause
+        return
+    fi
+    
+    echo -e "${CYAN}📋 Logs do servidor $server_name (Ctrl+C para sair):${NC}"
+    echo -e "${WHITE}══════════════════════════════════════════════════${NC}"
+    tail -f "$server_path/server.log"
+}
+
+# Função para abrir pasta do servidor
+open_server_folder() {
+    local server_path="$1"
+    local server_name=$(basename "$server_path")
+    
+    echo -e "${CYAN}📂 Pasta do servidor: $server_path${NC}"
+    echo -e "${WHITE}Arquivos no servidor:${NC}"
+    ls -la "$server_path"
+    pause
+}
+
+# Função para editar configurações
+edit_server_config() {
+    local server_path="$1"
+    local server_name=$(basename "$server_path")
+    
+    if [ ! -f "$server_path/server.properties" ]; then
+        echo -e "${YELLOW}📋 Arquivo server.properties não encontrado${NC}"
+        pause
+        return
+    fi
+    
+    echo -e "${CYAN}⚙️  Configurações atuais do servidor:${NC}"
+    echo -e "${WHITE}══════════════════════════════════════${NC}"
+    cat "$server_path/server.properties"
+    echo -e "${WHITE}══════════════════════════════════════${NC}"
+    echo
+    echo -e "${YELLOW}Para editar, use: nano $server_path/server.properties${NC}"
+    pause
+}
+
+# Função para deletar servidor
+delete_server() {
+    local server_path="$1"
+    local server_name=$(basename "$server_path")
+    
+    echo -e "${RED}⚠️  CUIDADO: Esta ação não pode ser desfeita!${NC}"
+    echo -e "${YELLOW}Servidor a ser deletado: $server_name${NC}"
+    echo -e "${WHITE}Pasta: $server_path${NC}"
+    echo
+    echo -ne "${RED}Digite 'DELETAR' para confirmar: ${NC}"
+    read -r confirm
+    
+    if [ "$confirm" = "DELETAR" ]; then
+        # Parar servidor se estiver rodando
+        local pid=$(pgrep -f "$server_path")
+        if [ -n "$pid" ]; then
+            echo -e "${CYAN}🛑 Parando servidor antes de deletar...${NC}"
+            kill -9 $pid 2>/dev/null
+            sleep 2
+        fi
+        
+        echo -e "${CYAN}🗑️  Removendo servidor...${NC}"
+        rm -rf "$server_path"
+        
+        if [ ! -d "$server_path" ]; then
+            echo -e "${GREEN}✅ Servidor $server_name deletado com sucesso!${NC}"
+            pause
+            return 0
+        else
+            echo -e "${RED}❌ Erro ao deletar servidor${NC}"
+            pause
+            return 1
+        fi
+    else
+        echo -e "${YELLOW}❌ Operação cancelada${NC}"
+        pause
+        return 1
+    fi
+}
+
+# Menus auxiliares para ações em massa
+start_server_menu() {
+    local servers=("$@")
+    echo -e "${CYAN}🚀 Escolha um servidor para iniciar:${NC}"
+    
+    local count=0
+    for server_path in "${servers[@]}"; do
+        ((count++))
+        local server_name=$(basename "$server_path")
+        local display_name=${server_name#*-}
+        
+        if pgrep -f "$server_path" >/dev/null; then
+            echo -e "${WHITE}$count) ${CYAN}$display_name${NC} ${GREEN}(já rodando)${NC}"
+        else
+            echo -e "${WHITE}$count) ${CYAN}$display_name${NC} ${RED}(parado)${NC}"
+        fi
+    done
+    
+    echo -ne "${YELLOW}Número do servidor: ${NC}"
+    read -r choice
+    
+    if [ "$choice" -gt 0 ] && [ "$choice" -le "${#servers[@]}" ]; then
+        start_server "${servers[$((choice-1))]}"
+    fi
+}
+
+stop_server_menu() {
+    local servers=("$@")
+    echo -e "${YELLOW}🛑 Escolha um servidor para parar:${NC}"
+    
+    local count=0
+    for server_path in "${servers[@]}"; do
+        ((count++))
+        local server_name=$(basename "$server_path")
+        local display_name=${server_name#*-}
+        
+        if pgrep -f "$server_path" >/dev/null; then
+            echo -e "${WHITE}$count) ${CYAN}$display_name${NC} ${GREEN}(rodando)${NC}"
+        else
+            echo -e "${WHITE}$count) ${CYAN}$display_name${NC} ${RED}(já parado)${NC}"
+        fi
+    done
+    
+    echo -ne "${YELLOW}Número do servidor: ${NC}"
+    read -r choice
+    
+    if [ "$choice" -gt 0 ] && [ "$choice" -le "${#servers[@]}" ]; then
+        stop_server "${servers[$((choice-1))]}"
+    fi
+}
+
+view_logs_menu() {
+    local servers=("$@")
+    echo -e "${PURPLE}📋 Escolha um servidor para ver os logs:${NC}"
+    
+    local count=0
+    for server_path in "${servers[@]}"; do
+        ((count++))
+        local server_name=$(basename "$server_path")
+        local display_name=${server_name#*-}
+        echo -e "${WHITE}$count) ${CYAN}$display_name${NC}"
+    done
+    
+    echo -ne "${YELLOW}Número do servidor: ${NC}"
+    read -r choice
+    
+    if [ "$choice" -gt 0 ] && [ "$choice" -le "${#servers[@]}" ]; then
+        view_server_logs "${servers[$((choice-1))]}"
+    fi
+}
+
+open_folder_menu() {
+    local servers=("$@")
+    echo -e "${CYAN}📂 Escolha um servidor para abrir a pasta:${NC}"
+    
+    local count=0
+    for server_path in "${servers[@]}"; do
+        ((count++))
+        local server_name=$(basename "$server_path")
+        local display_name=${server_name#*-}
+        echo -e "${WHITE}$count) ${CYAN}$display_name${NC}"
+    done
+    
+    echo -ne "${YELLOW}Número do servidor: ${NC}"
+    read -r choice
+    
+    if [ "$choice" -gt 0 ] && [ "$choice" -le "${#servers[@]}" ]; then
+        open_server_folder "${servers[$((choice-1))]}"
+    fi
+}
+
+delete_server_menu() {
+    local servers=("$@")
+    echo -e "${RED}🗑️  Escolha um servidor para DELETAR:${NC}"
+    
+    local count=0
+    for server_path in "${servers[@]}"; do
+        ((count++))
+        local server_name=$(basename "$server_path")
+        local display_name=${server_name#*-}
+        echo -e "${WHITE}$count) ${CYAN}$display_name${NC}"
+    done
+    
+    echo -ne "${YELLOW}Número do servidor: ${NC}"
+    read -r choice
+    
+    if [ "$choice" -gt 0 ] && [ "$choice" -le "${#servers[@]}" ]; then
+        delete_server "${servers[$((choice-1))]}"
+    fi
+}
+
+# Menu principal
+main_menu() {
+    while true; do
+        show_logo
+        echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║            ${WHITE}MENU PRINCIPAL${BLUE}               ║${NC}"
+        echo -e "${BLUE}║              ${CYAN}Usuário: $USERNAME${BLUE}             ║${NC}"
+        echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+        echo
+        
+        # Mostrar estatísticas rápidas
+        local total_servers=$(grep "TOTAL_SERVERS=" "$USER_CONFIG_FILE" 2>/dev/null | cut -d'=' -f2 || echo "0")
+        local active_servers=0
+        for server_path in "$MINECRAFT_DIR"/*; do
+            if [ -d "$server_path" ] && [[ "$(basename "$server_path")" =~ ^(vanilla|pocketmine|nukkit|forge|bedrock)- ]]; then
+                if pgrep -f "$server_path" >/dev/null; then
+                    ((active_servers++))
+                fi
+            fi
+        done
+        
+        echo -e "${CYAN}📊 Seus servidores: ${GREEN}$total_servers criados${NC} | ${YELLOW}$active_servers rodando${NC}"
+        echo
+        
+        echo -e "${WHITE}📦 CRIAR NOVOS SERVIDORES:${NC}"
+        echo -e "${WHITE}1)${NC} ${GREEN}🎮 Servidor Vanilla/Paper${NC}"
+        echo -e "${WHITE}2)${NC} ${CYAN}📱 Servidor PocketMine-MP (Bedrock)${NC}"
+        echo -e "${WHITE}3)${NC} ${YELLOW}⚡ Servidor Nukkit (Bedrock)${NC}"
+        echo -e "${WHITE}4)${NC} ${PURPLE}🔧 Servidor Forge (Mods Java)${NC}"
+        echo -e "${WHITE}5)${NC} ${BLUE}🏢 Servidor Bedrock Oficial${NC}"
+        echo
+        echo -e "${WHITE}⚙️  GERENCIAR SEUS SERVIDORES:${NC}"
+        echo -e "${WHITE}6)${NC} ${WHITE}📋 Listar Seus Servidores${NC}"
+        echo -e "${WHITE}7)${NC} ${WHITE}🎛️  Gerenciar Servidores${NC}"
+        echo -e "${WHITE}8)${NC} ${CYAN}📊 Estatísticas Pessoais${NC}"
+        echo -e "${WHITE}9)${NC} ${GREEN}🌐 Gerenciar Túneis SSH${NC}"
+        echo
+        echo -e "${WHITE}ℹ️  INFORMAÇÕES:${NC}"
+        echo -e "${WHITE}10)${NC} ${BLUE}💡 Como Conectar aos Servidores${NC}"
+        echo
+        echo -e "${WHITE}0)${NC} ${RED}🚪 Sair${NC}"
+        echo
+        echo -ne "${YELLOW}Escolha uma opção: ${NC}"
+        read -r choice
+        
+        case $choice in
+            1) create_vanilla_server ;;
+            2) create_pocketmine_server ;;
+            3) create_nukkit_server ;;
+            4) create_forge_server ;;
+            5) create_bedrock_server ;;
+            6) list_servers ;;
+            7) manage_servers ;;
+            8) show_user_statistics ;;
+            9) manage_ssh_tunnels ;;
+            10) show_connection_help ;;
+            0) 
+                echo -e "\n${GREEN}👋 Obrigado por usar o Minecraft Server Installer, $USERNAME!${NC}"
+                echo -e "${CYAN}   Todos os seus servidores estão em: $MINECRAFT_DIR${NC}"
+                echo -e "${YELLOW}   💡 Dica: Use túneis SSH para acesso seguro pela internet!${NC}"
+                exit 0
+                ;;
+            *) 
+                echo -e "${RED}Opção inválida! Tente novamente.${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+# Função para mostrar ajuda de conexão
+show_connection_help() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║        ${WHITE}COMO CONECTAR AOS SERVIDORES${BLUE}     ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -e "${CYAN}🌐 Como conectar aos seus servidores:${NC}"
+    echo
+    
+    echo -e "${WHITE}1️⃣  Servidores Java (Vanilla, Forge):${NC}"
+    echo -e "${YELLOW}   • Abra o Minecraft Java Edition${NC}"
+    echo -e "${YELLOW}   • Vá em Multiplayer → Add Server${NC}"
+    echo -e "${YELLOW}   • Server Address: ${CYAN}SEU_IP:PORTA${NC}"
+    echo -e "${YELLOW}   • Exemplo: ${CYAN}192.168.1.100:25565${NC}"
+    echo
+    
+    echo -e "${WHITE}2️⃣  Servidores Bedrock (PocketMine, Nukkit, Bedrock):${NC}"
+    echo -e "${YELLOW}   • Abra o Minecraft Bedrock Edition${NC}"
+    echo -e "${YELLOW}   • Vá em Play → Servers → Add Server${NC}"
+    echo -e "${YELLOW}   • Server Address: ${CYAN}SEU_IP${NC}"
+    echo -e "${YELLOW}   • Port: ${CYAN}PORTA${NC} (geralmente 19132)${NC}"
+    echo
+    
+    echo -e "${WHITE}🔍 Para descobrir seu IP:${NC}"
+    echo -e "${YELLOW}   • IP local: ${CYAN}$(hostname -I | awk '{print $1}')${NC}"
+    echo -e "${YELLOW}   • IP público: ${CYAN}$(curl -s ifconfig.me 2>/dev/null || echo "Execute: curl ifconfig.me")${NC}"
+    echo
+    
+    echo -e "${WHITE}📋 Suas portas em uso:${NC}"
+    local found_servers=false
+    for server_path in "$MINECRAFT_DIR"/*; do
+        if [ -d "$server_path" ] && [ -f "$server_path/server.properties" ]; then
+            local server_owner="unknown"
+            if [ -f "$server_path/server_info.txt" ]; then
+                server_owner=$(grep "OWNER=" "$server_path/server_info.txt" | cut -d'=' -f2)
+            fi
+            
+            if [ "$server_owner" = "$USERNAME" ] || [ "$server_owner" = "unknown" ]; then
+                found_servers=true
+                local port=$(grep "server-port=" "$server_path/server.properties" | cut -d'=' -f2)
+                local server_name=$(basename "$server_path")
+                local server_type=${server_name%%-*}
+                local display_name=${server_name#*-}
+                
+                local status="${RED}⚪${NC}"
+                if pgrep -f "$server_path" >/dev/null; then
+                    status="${GREEN}🟢${NC}"
+                fi
+                
+                echo -e "${WHITE}   • $display_name ($(echo $server_type | tr '[:lower:]' '[:upper:]')): ${CYAN}$port${NC} $status"
+                
+                # Mostrar endereços de conexão específicos
+                echo -e "${WHITE}     - Local: ${CYAN}$LOCAL_IP:$port${NC}"
+                if [ -n "$PUBLIC_IP" ]; then
+                    echo -e "${WHITE}     - Público: ${CYAN}$PUBLIC_IP:$port${NC} ${YELLOW}(requer port forwarding)${NC}"
+                fi
+                
+                # Verificar se há túneis configurados para este servidor
+                if [ -f "$SSH_TUNNELS_FILE" ]; then
+                    while IFS='|' read -r tunnel_name tunnel_local_port tunnel_host tunnel_user tunnel_remote_port tunnel_ssh_port tunnel_type; do
+                        if [ "$tunnel_local_port" = "$port" ]; then
+                            echo -e "${WHITE}     - Túnel SSH: ${CYAN}$tunnel_host:$tunnel_remote_port${NC}"
+                        fi
+                    done < "$SSH_TUNNELS_FILE"
+                fi
+                echo
+            fi
+        fi
+    done
+    
+    if [ "$found_servers" = false ]; then
+        echo -e "${YELLOW}   Nenhum servidor encontrado. Crie um primeiro!${NC}"
+    fi
+    
+    echo -e "${WHITE}🔧 Serviços de Tunneling Disponíveis:${NC}"
+    if command -v ngrok &> /dev/null || [ -f "$MINECRAFT_DIR/tools/ngrok" ]; then
+        echo -e "${GREEN}   ✅ ngrok instalado${NC}"
+    else
+        echo -e "${YELLOW}   ⚠️  ngrok não instalado${NC}"
+    fi
+    
+    if command -v cloudflared &> /dev/null; then
+        echo -e "${GREEN}   ✅ cloudflared instalado${NC}"
+    else
+        echo -e "${YELLOW}   ⚠️  cloudflared não instalado${NC}"
+    fi
+    
+    if command -v lt &> /dev/null; then
+        echo -e "${GREEN}   ✅ localtunnel instalado${NC}"
+    else
+        echo -e "${YELLOW}   ⚠️  localtunnel não instalado${NC}"
+    fi
+    
+    echo
+    echo -e "${WHITE}⚠️  Importante:${NC}"
+    echo -e "${YELLOW}   • Certifique-se que o servidor está rodando antes de conectar${NC}"
+    echo -e "${YELLOW}   • Configure o firewall se necessário${NC}"
+    echo -e "${YELLOW}   • Para acesso externo, configure port forwarding no roteador${NC}"
+    echo -e "${YELLOW}   • Túneis SSH são mais seguros que port forwarding${NC}"
+    
+    pause
+}
+
+# Função para gerenciar túneis SSH
+manage_ssh_tunnels() {
+    while true; do
+        show_logo
+        echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║         ${WHITE}GERENCIAR TÚNEIS SSH${BLUE}          ║${NC}"
+        echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+        echo
+        
+        if [ ! -f "$SSH_TUNNELS_FILE" ] || [ ! -s "$SSH_TUNNELS_FILE" ]; then
+            echo -e "${YELLOW}📭 Nenhum túnel SSH configurado${NC}"
+            echo -e "${CYAN}💡 Configure túneis ao criar novos servidores!${NC}"
+            echo -e "${WHITE}0) ${WHITE}Voltar ao Menu Principal${NC}"
+            echo
+            echo -ne "${YELLOW}Pressione ENTER para voltar: ${NC}"
+            read -r
+            break
+        fi
+        
+        echo -e "${CYAN}🌐 Túneis SSH configurados:${NC}"
+        echo
+        
+        local count=0
+        while IFS='|' read -r name local_port remote_host remote_user remote_port ssh_port server_type; do
+            ((count++))
+            
+            # Verificar se o túnel está ativo
+            local tunnel_status="${RED}⚪ Inativo${NC}"
+            if pgrep -f "ssh.*$remote_port:localhost:$local_port" >/dev/null; then
+                tunnel_status="${GREEN}🟢 Ativo${NC}"
+            fi
+            
+            echo -e "${WHITE}$count) ${CYAN}$name${NC} ($(echo $server_type | tr '[:lower:]' '[:upper:]'))"
+            echo -e "   ${WHITE}Status: $tunnel_status"
+            echo -e "   ${WHITE}Local: ${CYAN}localhost:$local_port${NC} → Remoto: ${CYAN}$remote_host:$remote_port${NC}"
+            echo -e "   ${WHITE}SSH: ${CYAN}$remote_user@$remote_host:$ssh_port${NC}"
+            echo
+        done < "$SSH_TUNNELS_FILE"
+        
+        echo -e "${WHITE}Ações:${NC}"
+        echo -e "${WHITE}$((count+1))) ${GREEN}🚀 Iniciar Túnel${NC}"
+        echo -e "${WHITE}$((count+2))) ${YELLOW}🛑 Parar Túnel${NC}"
+        echo -e "${WHITE}$((count+3))) ${PURPLE}📋 Ver Status Detalhado${NC}"
+        echo -e "${WHITE}$((count+4))) ${RED}🗑️  Remover Túnel${NC}"
+        echo -e "${WHITE}$((count+5))) ${BLUE}➕ Adicionar Novo Túnel${NC}"
+        echo -e "${WHITE}0) ${WHITE}Voltar ao Menu Principal${NC}"
+        echo
+        echo -ne "${YELLOW}Escolha uma opção: ${NC}"
+        read -r choice
+        
+        if [ "$choice" = "0" ]; then
+            break
+        elif [ "$choice" -gt 0 ] && [ "$choice" -le "$count" ]; then
+            manage_specific_tunnel "$choice"
+        elif [ "$choice" = "$((count+1))" ]; then
+            start_tunnel_menu
+        elif [ "$choice" = "$((count+2))" ]; then
+            stop_tunnel_menu
+        elif [ "$choice" = "$((count+3))" ]; then
+            show_tunnels_status
+        elif [ "$choice" = "$((count+4))" ]; then
+            remove_tunnel_menu
+        elif [ "$choice" = "$((count+5))" ]; then
+            add_new_tunnel_menu
+        else
+            echo -e "${RED}Opção inválida!${NC}"
+            sleep 1
+        fi
+    done
+}
+
+# Função para iniciar túnel específico
+start_tunnel_menu() {
+    echo -e "${CYAN}🚀 Escolha um túnel para iniciar:${NC}"
+    echo
+    
+    local count=0
+    while IFS='|' read -r name local_port remote_host remote_user remote_port ssh_port server_type; do
+        ((count++))
+        
+        local tunnel_status="${RED}⚪${NC}"
+        if pgrep -f "ssh.*$remote_port:localhost:$local_port" >/dev/null; then
+            tunnel_status="${GREEN}🟢${NC}"
+        fi
+        
+        echo -e "${WHITE}$count) $tunnel_status ${CYAN}$name${NC} → $remote_host:$remote_port"
+    done < "$SSH_TUNNELS_FILE"
+    
+    echo -ne "${YELLOW}Número do túnel: ${NC}"
+    read -r tunnel_choice
+    
+    if [ "$tunnel_choice" -gt 0 ] && [ "$tunnel_choice" -le "$count" ]; then
+        local selected_line=$(sed -n "${tunnel_choice}p" "$SSH_TUNNELS_FILE")
+        IFS='|' read -r name local_port remote_host remote_user remote_port ssh_port server_type <<< "$selected_line"
+        
+        # Verificar se já está rodando
+        if pgrep -f "ssh.*$remote_port:localhost:$local_port" >/dev/null; then
+            echo -e "${YELLOW}⚠️  Túnel já está ativo!${NC}"
+        else
+            echo -e "${CYAN}🚀 Iniciando túnel $name...${NC}"
+            
+            # Verificar se o servidor local está rodando
+            local server_running=false
+            for server_path in "$MINECRAFT_DIR"/*; do
+                if [ -d "$server_path" ] && [ -f "$server_path/server.properties" ]; then
+                    local port=$(grep "server-port=" "$server_path/server.properties" | cut -d'=' -f2)
+                    if [ "$port" = "$local_port" ] && pgrep -f "$server_path" >/dev/null; then
+                        server_running=true
+                        break
+                    fi
+                fi
+            done
+            
+            if [ "$server_running" = false ]; then
+                echo -e "${YELLOW}⚠️  Servidor local na porta $local_port não está rodando${NC}"
+                echo -e "${WHITE}Deseja continuar mesmo assim? (y/N): ${NC}"
+                read -r continue_anyway
+                if [[ ! $continue_anyway =~ ^[Yy]$ ]]; then
+                    return
+                fi
+            fi
+            
+            # Executar o script de túnel se existir
+            local tunnel_script="$MINECRAFT_DIR/tunnel-$name.sh"
+            if [ -f "$tunnel_script" ]; then
+                echo -e "${GREEN}Executando script de túnel...${NC}"
+                echo -e "${YELLOW}Pressione Ctrl+C para parar o túnel${NC}"
+                "$tunnel_script"
+            else
+                # Executar comando SSH diretamente
+                local tunnel_cmd="ssh -R $remote_port:localhost:$local_port -N -p $ssh_port $remote_user@$remote_host"
+                echo -e "${GREEN}Executando: $tunnel_cmd${NC}"
+                echo -e "${YELLOW}Pressione Ctrl+C para parar o túnel${NC}"
+                $tunnel_cmd
+            fi
+        fi
+    fi
+    
+    pause
+}
+
+# Função para parar túnel
+stop_tunnel_menu() {
+    echo -e "${YELLOW}🛑 Parando todos os túneis SSH ativos...${NC}"
+    
+    local stopped=0
+    while IFS='|' read -r name local_port remote_host remote_user remote_port ssh_port server_type; do
+        local pid=$(pgrep -f "ssh.*$remote_port:localhost:$local_port")
+        if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null
+            echo -e "${GREEN}✅ Túnel $name parado (PID: $pid)${NC}"
+            ((stopped++))
+        fi
+    done < "$SSH_TUNNELS_FILE"
+    
+    if [ "$stopped" -eq 0 ]; then
+        echo -e "${YELLOW}ℹ️  Nenhum túnel ativo encontrado${NC}"
+    else
+        echo -e "${GREEN}✅ $stopped túnel(s) parado(s)${NC}"
+    fi
+    
+    pause
+}
+
+# Função para mostrar status detalhado dos túneis
+show_tunnels_status() {
+    show_logo
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║        ${WHITE}STATUS DETALHADO TÚNEIS${BLUE}        ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo
+    
+    while IFS='|' read -r name local_port remote_host remote_user remote_port ssh_port server_type; do
+        echo -e "${CYAN}🔗 Túnel: $name${NC}"
+        echo -e "${WHITE}   Tipo: $(echo $server_type | tr '[:lower:]' '[:upper:]')${NC}"
+        echo -e "${WHITE}   Local: localhost:$local_port${NC}"
+        echo -e "${WHITE}   Remoto: $remote_host:$remote_port${NC}"
+        echo -e "${WHITE}   SSH: $remote_user@$remote_host:$ssh_port${NC}"
+        
+        # Status do túnel
+        local pid=$(pgrep -f "ssh.*$remote_port:localhost:$local_port")
+        if [ -n "$pid" ]; then
+            echo -e "${WHITE}   Status: ${GREEN}🟢 Ativo (PID: $pid)${NC}"
+        else
+            echo -e "${WHITE}   Status: ${RED}⚪ Inativo${NC}"
+        fi
+        
+        # Status do servidor local
+        local server_status="${RED}⚪ Parado${NC}"
+        for server_path in "$MINECRAFT_DIR"/*; do
+            if [ -d "$server_path" ] && [ -f "$server_path/server.properties" ]; then
+                local port=$(grep "server-port=" "$server_path/server.properties" | cut -d'=' -f2)
+                if [ "$port" = "$local_port" ] && pgrep -f "$server_path" >/dev/null; then
+                    server_status="${GREEN}🟢 Rodando${NC}"
+                    break
+                fi
+            fi
+        done
+        echo -e "${WHITE}   Servidor: $server_status"
+        
+        # Testar conectividade SSH
+        echo -e "${CYAN}   Testando SSH...${NC}"
+        if timeout 5 ssh -o BatchMode=yes -o ConnectTimeout=5 -p "$ssh_port" "$remote_user@$remote_host" exit 2>/dev/null; then
+            echo -e "${WHITE}   SSH: ${GREEN}✅ Conectável${NC}"
+        else
+            echo -e "${WHITE}   SSH: ${RED}❌ Erro de conexão${NC}"
+        fi
+        
+        echo
+    done < "$SSH_TUNNELS_FILE"
+    
+    pause
+}
+}
+
+# Função principal
+main() {
+    # Verificar dependências
+    check_dependencies
+    
+    # Mostrar menu principal
+    main_menu
+}
+
+# Executar script
+main "$@"
