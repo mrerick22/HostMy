@@ -12,7 +12,7 @@ WHITE='\033[1;37m'
 NC='\033[0m' # No Color
 
 # Definir diretório de trabalho
-PTERODACTYL_DIR="$HOME/workspace/pterodactyl"
+PTERODACTYL_DIR="pterodactyl"
 
 # Função para exibir o logo
 show_logo() {
@@ -393,7 +393,7 @@ wings_menu() {
         echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
         echo
         echo -e "${WHITE}1)${NC} ${GREEN}Instalar Wings${NC}"
-        echo -e "${WHITE}2)${NC} ${YELLOW>Parar Wings${NC}"
+        echo -e "${WHITE}2)${NC} ${YELLOW}Parar Wings${NC}"
         echo -e "${WHITE}3)${NC} ${CYAN}Iniciar Wings${NC}"
         echo -e "${WHITE}4)${NC} ${PURPLE}Ver Logs${NC}"
         echo -e "${WHITE}5)${NC} ${RED}Desinstalar Wings${NC}"
